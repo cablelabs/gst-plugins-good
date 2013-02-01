@@ -728,16 +728,12 @@ gst_qtdemux_handle_src_query (GstPad * pad, GstObject * parent,
     case GST_QUERY_DURATION:{
       GstFormat fmt;
 
-      if (qtdemux->mss_mode || qtdemux->fragmented)
-        goto upstream;
-
       gst_query_parse_duration (query, &fmt, NULL);
       if (fmt == GST_FORMAT_TIME) {
         /* First try to query upstream */
         res = gst_pad_query_default (pad, parent, query);
         if (!res) {
           gint64 duration = -1;
-
           gst_qtdemux_get_duration (qtdemux, &duration);
           if (duration > 0) {
             gst_query_set_duration (query, GST_FORMAT_TIME, duration);
@@ -769,33 +765,34 @@ gst_qtdemux_handle_src_query (GstPad * pad, GstObject * parent,
       GstFormat fmt;
       gboolean seekable;
 
-      if (qtdemux->mss_mode || qtdemux->fragmented)
-        goto upstream;
+      /* try upstream first */
+      res = gst_pad_query_default (pad, parent, query);
 
-      gst_query_parse_seeking (query, &fmt, NULL, NULL, NULL);
-      if (fmt == GST_FORMAT_TIME) {
-        gint64 duration = -1;
+      if (!res) {
+        gst_query_parse_seeking (query, &fmt, NULL, NULL, NULL);
+        if (fmt == GST_FORMAT_TIME) {
+          gint64 duration = -1;
 
-        gst_qtdemux_get_duration (qtdemux, &duration);
-        seekable = TRUE;
-        if (!qtdemux->pullbased) {
-          GstQuery *q;
+          gst_qtdemux_get_duration (qtdemux, &duration);
+          seekable = TRUE;
+          if (!qtdemux->pullbased) {
+            GstQuery *q;
 
-          /* we might be able with help from upstream */
-          seekable = FALSE;
-          q = gst_query_new_seeking (GST_FORMAT_BYTES);
-          if (gst_pad_peer_query (qtdemux->sinkpad, q)) {
-            gst_query_parse_seeking (q, &fmt, &seekable, NULL, NULL);
-            GST_LOG_OBJECT (qtdemux, "upstream BYTE seekable %d", seekable);
+            /* we might be able with help from upstream */
+            seekable = FALSE;
+            q = gst_query_new_seeking (GST_FORMAT_BYTES);
+            if (gst_pad_peer_query (qtdemux->sinkpad, q)) {
+              gst_query_parse_seeking (q, &fmt, &seekable, NULL, NULL);
+              GST_LOG_OBJECT (qtdemux, "upstream BYTE seekable %d", seekable);
+            }
+            gst_query_unref (q);
           }
-          gst_query_unref (q);
+          gst_query_set_seeking (query, GST_FORMAT_TIME, seekable, 0, duration);
+          res = TRUE;
         }
-        gst_query_set_seeking (query, GST_FORMAT_TIME, seekable, 0, duration);
-        res = TRUE;
       }
       break;
     }
-    upstream:
     default:
       res = gst_pad_query_default (pad, parent, query);
       break;
