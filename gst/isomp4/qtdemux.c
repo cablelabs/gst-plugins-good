@@ -8120,10 +8120,9 @@ qtdemux_expose_streams (GstQTDemux * qtdemux)
     /* now we have all info and can expose */
     list = stream->pending_tags;
     stream->pending_tags = NULL;
-    oldpads = g_slist_prepend (oldpads, oldpad);
-    gst_qtdemux_add_stream (qtdemux, stream, list);
     if (oldpad)
-      gst_pad_push_event (oldpad, gst_event_new_eos ());
+      oldpads = g_slist_prepend (oldpads, oldpad);
+    gst_qtdemux_add_stream (qtdemux, stream, list);
   }
 
   gst_qtdemux_guess_bitrate (qtdemux);
@@ -8133,8 +8132,7 @@ qtdemux_expose_streams (GstQTDemux * qtdemux)
   for (iter = oldpads; iter; iter = g_slist_next (iter)) {
     GstPad *oldpad = iter->data;
 
-    if (!oldpad)
-      continue;
+    gst_pad_push_event (oldpad, gst_event_new_eos ());
     gst_pad_set_active (oldpad, FALSE);
     gst_element_remove_pad (GST_ELEMENT (qtdemux), oldpad);
     gst_object_unref (oldpad);
