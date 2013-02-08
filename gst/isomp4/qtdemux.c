@@ -445,6 +445,7 @@ static gboolean qtdemux_parse_samples (GstQTDemux * qtdemux,
 static GstFlowReturn qtdemux_expose_streams (GstQTDemux * qtdemux);
 static void gst_qtdemux_stream_free (GstQTDemux * qtdemux,
     QtDemuxStream * stream);
+static void gst_qtdemux_stream_clear (QtDemuxStream * stream);
 static GstFlowReturn qtdemux_prepare_streams (GstQTDemux * qtdemux);
 
 static void
@@ -1723,7 +1724,7 @@ gst_qtdemux_setcaps (GstQTDemux * demux, GstCaps * caps)
 }
 
 static void
-gst_qtdemux_reset (GstQTDemux * qtdemux)
+gst_qtdemux_reset (GstQTDemux * qtdemux, gboolean hard)
 {
   gint n;
 
@@ -1738,7 +1739,6 @@ gst_qtdemux_reset (GstQTDemux * qtdemux)
   qtdemux->offset = 0;
   qtdemux->first_mdat = -1;
   qtdemux->header_size = 0;
-  qtdemux->got_moov = FALSE;
   qtdemux->mdatoffset = GST_CLOCK_TIME_NONE;
   if (qtdemux->mdatbuffer)
     gst_buffer_unref (qtdemux->mdatbuffer);
@@ -1760,15 +1760,27 @@ gst_qtdemux_reset (GstQTDemux * qtdemux)
   qtdemux->element_index = NULL;
 #endif
   gst_adapter_clear (qtdemux->adapter);
-  for (n = 0; n < qtdemux->n_streams; n++) {
-    gst_qtdemux_stream_free (qtdemux, qtdemux->streams[n]);
-    qtdemux->streams[n] = NULL;
+
+  if (hard) {
+    for (n = 0; n < qtdemux->n_streams; n++) {
+      gst_qtdemux_stream_free (qtdemux, qtdemux->streams[n]);
+      qtdemux->streams[n] = NULL;
+    }
+    qtdemux->n_streams = 0;
+    qtdemux->n_video_streams = 0;
+    qtdemux->n_audio_streams = 0;
+    qtdemux->n_sub_streams = 0;
+    qtdemux->exposed = FALSE;
+    qtdemux->fragmented = FALSE;
+    qtdemux->mss_mode = FALSE;
+    gst_caps_replace (&qtdemux->media_caps, NULL);
+    qtdemux->timescale = 0;
+    qtdemux->got_moov = FALSE;
+  } else {
+    for (n = 0; n < qtdemux->n_streams; n++)
+      gst_qtdemux_stream_clear (qtdemux->streams[n]);
   }
   qtdemux->major_brand = 0;
-  qtdemux->n_streams = 0;
-  qtdemux->n_video_streams = 0;
-  qtdemux->n_audio_streams = 0;
-  qtdemux->n_sub_streams = 0;
   gst_segment_init (&qtdemux->segment, GST_FORMAT_TIME);
   if (qtdemux->pending_newsegment)
     gst_object_unref (qtdemux->pending_newsegment);
@@ -1779,13 +1791,8 @@ gst_qtdemux_reset (GstQTDemux * qtdemux)
   qtdemux->upstream_seekable = FALSE;
   qtdemux->upstream_size = 0;
 
-  gst_caps_replace (&qtdemux->media_caps, NULL);
-  qtdemux->mss_mode = FALSE;
-  qtdemux->exposed = FALSE;
   qtdemux->base_timestamp = GST_CLOCK_TIME_NONE;
-  qtdemux->timescale = 0;
   qtdemux->duration = 0;
-  qtdemux->fragmented = FALSE;
   qtdemux->mfra_offset = 0;
   qtdemux->moof_offset = 0;
 }
@@ -1902,7 +1909,7 @@ gst_qtdemux_handle_sink_event (GstPad * sinkpad, GstObject * parent,
     }
     case GST_EVENT_FLUSH_STOP:
     {
-      gst_qtdemux_reset (demux);
+      gst_qtdemux_reset (demux, FALSE);
       break;
     }
     case GST_EVENT_EOS:
@@ -2000,7 +2007,7 @@ gst_qtdemux_stbl_free (QtDemuxStream * stream)
 }
 
 static void
-gst_qtdemux_stream_free (GstQTDemux * qtdemux, QtDemuxStream * stream)
+gst_qtdemux_stream_clear (QtDemuxStream * stream)
 {
   if (stream->allocator)
     gst_object_unref (stream->allocator);
@@ -2008,17 +2015,36 @@ gst_qtdemux_stream_free (GstQTDemux * qtdemux, QtDemuxStream * stream)
     gst_buffer_unref (GST_BUFFER_CAST (stream->buffers->data));
     stream->buffers = g_slist_delete_link (stream->buffers, stream->buffers);
   }
-  if (stream->pad)
-    gst_element_remove_pad (GST_ELEMENT_CAST (qtdemux), stream->pad);
   g_free (stream->samples);
-  if (stream->caps)
-    gst_caps_unref (stream->caps);
+  stream->samples = NULL;
   g_free (stream->segments);
+  stream->segments = NULL;
   if (stream->pending_tags)
     gst_tag_list_unref (stream->pending_tags);
+  stream->pending_tags = NULL;
   g_free (stream->redirect_uri);
+  stream->redirect_uri = NULL;
   /* free stbl sub-atoms */
   gst_qtdemux_stbl_free (stream);
+
+  stream->last_ret = GST_FLOW_OK;
+  stream->sent_eos = FALSE;
+  stream->segment_index = -1;
+  stream->time_position = 0;
+  stream->sample_index = -1;
+  stream->stbl_index = -1;
+  stream->n_samples = 0;
+}
+
+static void
+gst_qtdemux_stream_free (GstQTDemux * qtdemux, QtDemuxStream * stream)
+{
+  gst_qtdemux_stream_clear (stream);
+  if (stream->caps)
+    gst_caps_unref (stream->caps);
+  stream->caps = NULL;
+  if (stream->pad)
+    gst_element_remove_pad (GST_ELEMENT_CAST (qtdemux), stream->pad);
   g_free (stream);
 }
 
@@ -2039,7 +2065,7 @@ gst_qtdemux_change_state (GstElement * element, GstStateChange transition)
 
   switch (transition) {
     case GST_STATE_CHANGE_PAUSED_TO_READY:{
-      gst_qtdemux_reset (qtdemux);
+      gst_qtdemux_reset (qtdemux, TRUE);
       break;
     }
     default:
