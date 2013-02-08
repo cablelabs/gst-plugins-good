@@ -1711,6 +1711,9 @@ gst_qtdemux_reset (GstQTDemux * qtdemux)
 {
   gint n;
 
+  GST_DEBUG_OBJECT (qtdemux, "Resetting demux");
+  gst_pad_stop_task (qtdemux->sinkpad);
+
   qtdemux->state = QTDEMUX_STATE_INITIAL;
   qtdemux->neededbytes = 16;
   qtdemux->todrop = 0;
@@ -1724,9 +1727,14 @@ gst_qtdemux_reset (GstQTDemux * qtdemux)
   if (qtdemux->mdatbuffer)
     gst_buffer_unref (qtdemux->mdatbuffer);
   qtdemux->mdatbuffer = NULL;
+  qtdemux->mdatleft = 0;
   if (qtdemux->comp_brands)
     gst_buffer_unref (qtdemux->comp_brands);
   qtdemux->comp_brands = NULL;
+  if (qtdemux->moov_node)
+    g_node_destroy (qtdemux->moov_node);
+  qtdemux->moov_node = NULL;
+  qtdemux->moov_node_compressed = NULL;
   if (qtdemux->tag_list)
     gst_mini_object_unref (GST_MINI_OBJECT_CAST (qtdemux->tag_list));
   qtdemux->tag_list = NULL;
@@ -1746,6 +1754,10 @@ gst_qtdemux_reset (GstQTDemux * qtdemux)
   qtdemux->n_audio_streams = 0;
   qtdemux->n_sub_streams = 0;
   gst_segment_init (&qtdemux->segment, GST_FORMAT_TIME);
+  if (qtdemux->pending_newsegment)
+    gst_object_unref (qtdemux->pending_newsegment);
+  qtdemux->pending_newsegment = NULL;
+  qtdemux->upstream_newsegment = TRUE;
   qtdemux->requested_seek_time = GST_CLOCK_TIME_NONE;
   qtdemux->seek_offset = 0;
   qtdemux->upstream_seekable = FALSE;
@@ -1755,6 +1767,11 @@ gst_qtdemux_reset (GstQTDemux * qtdemux)
   qtdemux->mss_mode = FALSE;
   qtdemux->exposed = FALSE;
   qtdemux->base_timestamp = GST_CLOCK_TIME_NONE;
+  qtdemux->timescale = 0;
+  qtdemux->duration = 0;
+  qtdemux->fragmented = FALSE;
+  qtdemux->mfra_offset = 0;
+  qtdemux->moof_offset = 0;
 }
 
 static gboolean
@@ -4634,9 +4651,7 @@ gst_qtdemux_chain (GstPad * sinkpad, GstObject * parent, GstBuffer * inbuf)
         /* initial newsegment sent here after having added pads,
          * possible others in sink_event */
         if (G_UNLIKELY (demux->pending_newsegment)) {
-          gst_qtdemux_push_event (demux, demux->pending_newsegment);
-          demux->pending_newsegment = NULL;
-          demux->upstream_newsegment = FALSE;
+          gst_qtdemux_push_pending_newsegment (demux);
           /* clear to send tags on all streams */
           for (i = 0; i < demux->n_streams; i++) {
             gst_qtdemux_push_tags (demux, demux->streams[i]);
