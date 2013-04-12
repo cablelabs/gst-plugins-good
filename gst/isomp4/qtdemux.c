@@ -510,6 +510,9 @@ gst_qtdemux_init (GstQTDemux * qtdemux)
   qtdemux->mdatoffset = GST_CLOCK_TIME_NONE;
   qtdemux->mdatbuffer = NULL;
   qtdemux->base_timestamp = GST_CLOCK_TIME_NONE;
+  qtdemux->media_caps = NULL;
+  qtdemux->exposed = FALSE;
+  qtdemux->mss_mode = FALSE;
   qtdemux->pending_newsegment = NULL;
   qtdemux->upstream_newsegment = FALSE;
   gst_segment_init (&qtdemux->segment, GST_FORMAT_TIME);
