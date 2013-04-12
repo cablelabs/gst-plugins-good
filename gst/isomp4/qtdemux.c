@@ -1734,34 +1734,36 @@ gst_qtdemux_reset (GstQTDemux * qtdemux, gboolean hard)
   GST_DEBUG_OBJECT (qtdemux, "Resetting demux");
   gst_pad_stop_task (qtdemux->sinkpad);
 
-  qtdemux->state = QTDEMUX_STATE_INITIAL;
-  qtdemux->neededbytes = 16;
-  qtdemux->todrop = 0;
-  qtdemux->pullbased = FALSE;
-  qtdemux->posted_redirect = FALSE;
-  qtdemux->offset = 0;
-  qtdemux->first_mdat = -1;
-  qtdemux->header_size = 0;
-  qtdemux->mdatoffset = GST_CLOCK_TIME_NONE;
-  if (qtdemux->mdatbuffer)
-    gst_buffer_unref (qtdemux->mdatbuffer);
-  qtdemux->mdatbuffer = NULL;
-  qtdemux->mdatleft = 0;
-  if (qtdemux->comp_brands)
-    gst_buffer_unref (qtdemux->comp_brands);
-  qtdemux->comp_brands = NULL;
-  if (qtdemux->moov_node)
-    g_node_destroy (qtdemux->moov_node);
-  qtdemux->moov_node = NULL;
-  qtdemux->moov_node_compressed = NULL;
-  if (qtdemux->tag_list)
-    gst_mini_object_unref (GST_MINI_OBJECT_CAST (qtdemux->tag_list));
-  qtdemux->tag_list = NULL;
+  if (hard || qtdemux->mss_mode) {
+    qtdemux->state = QTDEMUX_STATE_INITIAL;
+    qtdemux->neededbytes = 16;
+    qtdemux->todrop = 0;
+    qtdemux->pullbased = FALSE;
+    qtdemux->posted_redirect = FALSE;
+    qtdemux->first_mdat = -1;
+    qtdemux->header_size = 0;
+    qtdemux->mdatoffset = GST_CLOCK_TIME_NONE;
+    if (qtdemux->mdatbuffer)
+      gst_buffer_unref (qtdemux->mdatbuffer);
+    qtdemux->mdatbuffer = NULL;
+    qtdemux->mdatleft = 0;
+    if (qtdemux->comp_brands)
+      gst_buffer_unref (qtdemux->comp_brands);
+    qtdemux->comp_brands = NULL;
+    if (qtdemux->moov_node)
+      g_node_destroy (qtdemux->moov_node);
+    qtdemux->moov_node = NULL;
+    qtdemux->moov_node_compressed = NULL;
+    if (qtdemux->tag_list)
+      gst_mini_object_unref (GST_MINI_OBJECT_CAST (qtdemux->tag_list));
+    qtdemux->tag_list = NULL;
 #if 0
-  if (qtdemux->element_index)
-    gst_object_unref (qtdemux->element_index);
-  qtdemux->element_index = NULL;
+    if (qtdemux->element_index)
+      gst_object_unref (qtdemux->element_index);
+    qtdemux->element_index = NULL;
 #endif
+  }
+  qtdemux->offset = 0;
   gst_adapter_clear (qtdemux->adapter);
 
   if (hard) {
@@ -1779,25 +1781,33 @@ gst_qtdemux_reset (GstQTDemux * qtdemux, gboolean hard)
     gst_caps_replace (&qtdemux->media_caps, NULL);
     qtdemux->timescale = 0;
     qtdemux->got_moov = FALSE;
-  } else {
+  } else if (qtdemux->mss_mode) {
     for (n = 0; n < qtdemux->n_streams; n++)
       gst_qtdemux_stream_clear (qtdemux->streams[n]);
+  } else {
+    for (n = 0; n < qtdemux->n_streams; n++) {
+      qtdemux->streams[n]->last_ret = GST_FLOW_OK;
+      qtdemux->streams[n]->sent_eos = FALSE;
+    }
   }
-  qtdemux->major_brand = 0;
-  gst_segment_init (&qtdemux->segment, GST_FORMAT_TIME);
-  if (qtdemux->pending_newsegment)
-    gst_object_unref (qtdemux->pending_newsegment);
-  qtdemux->pending_newsegment = NULL;
-  qtdemux->upstream_newsegment = TRUE;
-  qtdemux->requested_seek_time = GST_CLOCK_TIME_NONE;
-  qtdemux->seek_offset = 0;
-  qtdemux->upstream_seekable = FALSE;
-  qtdemux->upstream_size = 0;
 
-  qtdemux->base_timestamp = GST_CLOCK_TIME_NONE;
-  qtdemux->duration = 0;
-  qtdemux->mfra_offset = 0;
-  qtdemux->moof_offset = 0;
+  if (hard || qtdemux->mss_mode) {
+    qtdemux->major_brand = 0;
+    gst_segment_init (&qtdemux->segment, GST_FORMAT_TIME);
+    if (qtdemux->pending_newsegment)
+      gst_object_unref (qtdemux->pending_newsegment);
+    qtdemux->pending_newsegment = NULL;
+    qtdemux->upstream_newsegment = TRUE;
+    qtdemux->requested_seek_time = GST_CLOCK_TIME_NONE;
+    qtdemux->seek_offset = 0;
+    qtdemux->upstream_seekable = FALSE;
+    qtdemux->upstream_size = 0;
+
+    qtdemux->base_timestamp = GST_CLOCK_TIME_NONE;
+    qtdemux->duration = 0;
+    qtdemux->mfra_offset = 0;
+    qtdemux->moof_offset = 0;
+  }
 }
 
 static gboolean
