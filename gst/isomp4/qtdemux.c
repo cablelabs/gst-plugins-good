@@ -1762,6 +1762,21 @@ gst_qtdemux_reset (GstQTDemux * qtdemux, gboolean hard)
       gst_object_unref (qtdemux->element_index);
     qtdemux->element_index = NULL;
 #endif
+    qtdemux->major_brand = 0;
+    gst_segment_init (&qtdemux->segment, GST_FORMAT_TIME);
+    if (qtdemux->pending_newsegment)
+      gst_object_unref (qtdemux->pending_newsegment);
+    qtdemux->pending_newsegment = NULL;
+    qtdemux->upstream_newsegment = TRUE;
+    qtdemux->requested_seek_time = GST_CLOCK_TIME_NONE;
+    qtdemux->seek_offset = 0;
+    qtdemux->upstream_seekable = FALSE;
+    qtdemux->upstream_size = 0;
+
+    qtdemux->fragment_start = -1;
+    qtdemux->duration = 0;
+    qtdemux->mfra_offset = 0;
+    qtdemux->moof_offset = 0;
   }
   qtdemux->offset = 0;
   gst_adapter_clear (qtdemux->adapter);
@@ -1789,24 +1804,6 @@ gst_qtdemux_reset (GstQTDemux * qtdemux, gboolean hard)
       qtdemux->streams[n]->last_ret = GST_FLOW_OK;
       qtdemux->streams[n]->sent_eos = FALSE;
     }
-  }
-
-  if (hard || qtdemux->mss_mode) {
-    qtdemux->major_brand = 0;
-    gst_segment_init (&qtdemux->segment, GST_FORMAT_TIME);
-    if (qtdemux->pending_newsegment)
-      gst_object_unref (qtdemux->pending_newsegment);
-    qtdemux->pending_newsegment = NULL;
-    qtdemux->upstream_newsegment = TRUE;
-    qtdemux->requested_seek_time = GST_CLOCK_TIME_NONE;
-    qtdemux->seek_offset = 0;
-    qtdemux->upstream_seekable = FALSE;
-    qtdemux->upstream_size = 0;
-
-    qtdemux->fragment_start = -1;
-    qtdemux->duration = 0;
-    qtdemux->mfra_offset = 0;
-    qtdemux->moof_offset = 0;
   }
 }
 
@@ -2528,7 +2525,7 @@ qtdemux_find_stream (GstQTDemux * qtdemux, guint32 id)
       return stream;
   }
   if (qtdemux->mss_mode) {
-    /* we should have only 1 stream in the end */
+    /* mss should have only 1 stream anyway */
     return qtdemux->streams[0];
   }
 
