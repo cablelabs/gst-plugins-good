@@ -167,7 +167,7 @@ static void gst_soup_http_src_authenticate_cb (SoupSession * session,
     SoupMessage * msg, SoupAuth * auth, gboolean retrying,
     GstSoupHTTPSrc * src);
 static void gst_soup_http_src_determine_size (GstSoupHTTPSrc * src);
-static void gst_soup_http_src_log_http_info (GstSoupHTTPSrc * bsrc);
+static void gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src);
 
 #define gst_soup_http_src_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstSoupHTTPSrc, gst_soup_http_src, GST_TYPE_PUSH_SRC,
@@ -560,15 +560,14 @@ gst_soup_http_src_add_range_header (GstSoupHTTPSrc * src, guint64 offset,
     }
     GST_INFO_OBJECT (src, "Adding range to HEAD request");
     soup_message_headers_append (src->msg->request_headers, "Range", buf);
-  } else {
+  } else if (src->msg->method == SOUP_METHOD_HEAD) {
     // If this is a HEAD request include range to get content length incase
     // server does not include by default
-    if (src->msg->method == SOUP_METHOD_HEAD) {
-      GST_INFO_OBJECT (src, "Adding range to HEAD request");
-      soup_message_headers_append (src->msg->request_headers, "Range",
-          "bytes=0-");
-    }
+    GST_INFO_OBJECT (src, "Adding range to HEAD request");
+    soup_message_headers_append (src->msg->request_headers, "Range",
+        "bytes=0-");
   }
+
   src->read_position = offset;
   return TRUE;
 }
@@ -783,7 +782,9 @@ gst_soup_http_src_got_headers_cb (SoupMessage * msg, GstSoupHTTPSrc * src)
       src->content_size = newsize;
       src->have_size = TRUE;
       src->seekable = TRUE;
-      GST_DEBUG_OBJECT (src, "size = %" G_GUINT64_FORMAT, src->content_size);
+      GST_INFO_OBJECT (src,
+          "Got content-length, setting size = %" G_GUINT64_FORMAT,
+          src->content_size);
 
       basesrc = GST_BASE_SRC_CAST (src);
       basesrc->segment.duration = src->content_size;
@@ -1404,7 +1405,7 @@ gst_soup_http_src_get_size (GstBaseSrc * bsrc, guint64 * size)
 static void
 gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src)
 {
-  const gchar *hname, *value;
+  const gchar *header_name, *header_value;
   SoupMessageHeadersIter iter;
 
   if (src->msg) {
@@ -1414,8 +1415,8 @@ gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src)
 
     GST_INFO_OBJECT (src, "REQUEST HEADERS:");
     soup_message_headers_iter_init (&iter, src->msg->request_headers);
-    while (soup_message_headers_iter_next (&iter, &hname, &value))
-      GST_INFO_OBJECT (src, "%s: %s", hname, value);
+    while (soup_message_headers_iter_next (&iter, &header_name, &header_value))
+      GST_INFO_OBJECT (src, "%s: %s", header_name, header_value);
 
     GST_INFO_OBJECT (src, "RESPONSE: HTTP/1.%d %d %s",
         soup_message_get_http_version (src->msg),
@@ -1423,8 +1424,8 @@ gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src)
 
     GST_INFO_OBJECT (src, "RESPONSE HEADERS:");
     soup_message_headers_iter_init (&iter, src->msg->response_headers);
-    while (soup_message_headers_iter_next (&iter, &hname, &value))
-      GST_INFO_OBJECT (src, "%s: %s", hname, value);
+    while (soup_message_headers_iter_next (&iter, &header_name, &header_value))
+      GST_INFO_OBJECT (src, "%s: %s", header_name, header_value);
   } else {
     GST_INFO_OBJECT (src, "Null soup http message");
   }
@@ -1433,107 +1434,62 @@ gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src)
 static void
 gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
 {
-  int i = 0;
-  guint64 size = 0;
-  const gchar *header = NULL;
-  gchar *value = NULL;
+  guint64 size;
+  const gchar *header;
+  gchar *header_uppercase;
   GstBaseSrc *basesrc;
-  gint ret_code = 0;
-  guint64 ullong1 = 0;
-  guint64 ullong2 = 0;
-  guint64 ullong3 = 0;
-  gchar *tmp_str1 = NULL;
-  gchar *tmp_str2 = NULL;
+  const gchar *format;
 
   if (!src->msg) {
     GST_INFO_OBJECT (src, "Unable to determine size due to null HTTP message");
     return;
   }
 
-  if (!src->have_size) {
-    // Was TimeSeekRange in HEAD response?
-    if ((header = soup_message_headers_get_one (src->msg->response_headers,
-                "TimeSeekRange")) != NULL) {
-
-      // Parse out size from string in format:
-      //   TimeSeekRange.dlna.org: npt=0:00:00.000-0:04:58.783/0:04:58.783 bytes=0-31683075/31683076
-      value = g_strdup (header);
-
-      // Convert to uppercase
-      for (i = 0; value[i]; i++) {
-        value[i] = toupper (value[i]);
-      }
-
-      // Find start value after BYTES= string
-      tmp_str2 = strstr (value, "BYTES");
-      tmp_str1 = strstr (tmp_str2, "=");
-      if (tmp_str1 != NULL) {
-        tmp_str1++;
-
-        if ((ret_code =
-                sscanf (tmp_str1,
-                    "%" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT "/%"
-                    G_GUINT64_FORMAT, &ullong1, &ullong2, &ullong3)) != 3) {
-          GST_WARNING_OBJECT (src,
-              "Problems parsing BYTES from TimeSeekRange header in HEAD response: %s",
-              tmp_str1);
-        } else {
-          size = ullong3;
-          GST_INFO_OBJECT (src,
-              "Set size based on TimeSeekRange hdr %s in head response, size = %"
-              G_GUINT64_FORMAT, value, size);
-        }
-      }
-      free (value);
-
-
-    } else if ((header =
-            soup_message_headers_get_one (src->msg->response_headers,
-                "content-range")) != NULL) {
-
-      // Content-Range header in HEAD response
-      value = g_strdup (header);
-
-      // Convert to uppercase
-      for (i = 0; value[i]; i++) {
-        value[i] = toupper (value[i]);
-      }
-
-      // Parse out size from string in format: bytes 0-168042671/168042672
-      if ((ret_code =
-              sscanf (value,
-                  "BYTES %" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT "/%"
-                  G_GUINT64_FORMAT, &ullong1, &ullong2, &ullong3)) != 3) {
-        GST_WARNING_OBJECT (src,
-            "Problems parsing BYTES from Content-Range header in HEAD response: %s",
-            value);
-      } else {
-        size = ullong3;
-        GST_INFO_OBJECT (src,
-            "Set size based on content-range hdr %s in head response, size = %"
-            G_GUINT64_FORMAT, value, size);
-      }
-    }
-    // If now have size, update accordingly
-    if (size > 0) {
-      src->content_size = size;
-      src->have_size = TRUE;
-      src->seekable = TRUE;
-      GST_INFO_OBJECT (src, "Set seekable with size = %" G_GUINT64_FORMAT,
-          src->content_size);
-
-      basesrc = GST_BASE_SRC_CAST (src);
-      basesrc->segment.duration = src->content_size;
-      gst_element_post_message (GST_ELEMENT (src),
-          gst_message_new_duration_changed (GST_OBJECT (src)));
-    } else
-      GST_INFO_OBJECT (src,
-          "Unable to get size due to no time seek or content range headers available");
-
-  } else {
+  if (src->have_size) {
     GST_INFO_OBJECT (src, "Already have size = %" G_GUINT64_FORMAT,
         src->content_size);
+    return;
   }
+
+  if ((header =
+          soup_message_headers_get_one (src->msg->response_headers,
+              "content-range")) != NULL) {
+    // Parse out size from string in format: bytes 0-168042671/168042672
+    format = "%*[^/]/%" G_GUINT64_FORMAT;
+  } else {
+    GST_INFO_OBJECT (src,
+        "Unable to get size due to no content range header available");
+    return;
+  }
+
+  // Convert to upper case
+  header_uppercase = g_ascii_strup (header, -1);
+  if (sscanf (header_uppercase, format, &size) != 1) {
+    GST_WARNING_OBJECT (src,
+        "Problems parsing BYTES from header using format %s in HEAD response: %s",
+        format, header);
+    size = 0;
+  } else {
+    GST_INFO_OBJECT (src,
+        "Set size based on header %s in head response, size = %"
+        G_GUINT64_FORMAT, header, size);
+  }
+  g_free (header_uppercase);
+
+  // If now have size, update accordingly
+  if (size > 0) {
+    src->content_size = size;
+    src->have_size = TRUE;
+    src->seekable = TRUE;
+    GST_INFO_OBJECT (src, "Set seekable with size = %" G_GUINT64_FORMAT,
+        src->content_size);
+
+    basesrc = GST_BASE_SRC_CAST (src);
+    basesrc->segment.duration = src->content_size;
+    gst_element_post_message (GST_ELEMENT (src),
+        gst_message_new_duration_changed (GST_OBJECT (src)));
+  } else
+    GST_INFO_OBJECT (src, "Got size 0 from content range header");
 }
 
 static gboolean
@@ -1614,6 +1570,7 @@ gst_soup_http_src_query (GstBaseSrc * bsrc, GstQuery * query)
   gboolean ret;
   GstSchedulingFlags flags;
   gint minsize, maxsize, align;
+
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_URI:
       gst_query_set_uri (query, src->location);
