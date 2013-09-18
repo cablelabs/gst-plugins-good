@@ -1455,7 +1455,7 @@ gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
           soup_message_headers_get_one (src->msg->response_headers,
               "content-range")) != NULL) {
     // Parse out size from string in format: bytes 0-168042671/168042672
-    format = "%*[^/]/%" G_GUINT64_FORMAT;
+    format = "BYTES%*[^/]/%" G_GUINT64_FORMAT;
   } else {
     GST_INFO_OBJECT (src,
         "Unable to get size due to no content range header available");
@@ -1468,7 +1468,8 @@ gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
     GST_WARNING_OBJECT (src,
         "Problems parsing BYTES from header using format %s in HEAD response: %s",
         format, header);
-    size = 0;
+    g_free (header_uppercase);
+    return;
   } else {
     GST_INFO_OBJECT (src,
         "Set size based on header %s in head response, size = %"
