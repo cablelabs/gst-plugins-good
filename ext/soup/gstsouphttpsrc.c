@@ -75,6 +75,8 @@
 #ifdef HAVE_STDLIB_H
 #include <stdlib.h>             /* atoi() */
 #endif
+#include <ctype.h>              /* toupper() */
+#include <stdio.h>              /* sscanf() */
 #include <gst/gstelement.h>
 #include <gst/gst-i18n-plugin.h>
 #include <libsoup/soup.h>
@@ -105,7 +107,9 @@ enum
   PROP_COOKIES,
   PROP_IRADIO_MODE,
   PROP_TIMEOUT,
-  PROP_EXTRA_HEADERS
+  PROP_EXTRA_HEADERS,
+  PROP_EXCLUDE_RANGE_HEADER,
+  PROP_CONTENT_SIZE
 };
 
 #define DEFAULT_USER_AGENT           "GStreamer souphttpsrc "
@@ -164,6 +168,10 @@ static void gst_soup_http_src_finished_cb (SoupMessage * msg,
 static void gst_soup_http_src_authenticate_cb (SoupSession * session,
     SoupMessage * msg, SoupAuth * auth, gboolean retrying,
     GstSoupHTTPSrc * src);
+static void gst_soup_http_src_determine_size (GstSoupHTTPSrc * src);
+static gboolean
+gst_soup_http_src_set_size (GstSoupHTTPSrc * src, guint64 new_size);
+static void gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src);
 
 #define gst_soup_http_src_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstSoupHTTPSrc, gst_soup_http_src, GST_TYPE_PUSH_SRC,
@@ -243,6 +251,14 @@ gst_soup_http_src_class_init (GstSoupHTTPSrcClass * klass)
           "Enable internet radio mode (ask server to send shoutcast/icecast "
           "metadata interleaved with the actual stream data)",
           DEFAULT_IRADIO_MODE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_EXCLUDE_RANGE_HEADER,
+      g_param_spec_boolean ("exclude-range-header", "exclude-range-header",
+          "Exclude range header in HTTP requests",
+          FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_CONTENT_SIZE,
+      g_param_spec_uint64 ("content-size", "Content size in bytes",
+          "Size in bytes of content associated with URI",
+          0, G_MAXUINT64, 0, G_PARAM_READWRITE));
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&srctemplate));
@@ -308,6 +324,7 @@ gst_soup_http_src_init (GstSoupHTTPSrc * src)
   src->proxy_pw = NULL;
   src->cookies = NULL;
   src->iradio_mode = DEFAULT_IRADIO_MODE;
+  src->exclude_range_header = FALSE;
   src->loop = NULL;
   src->context = NULL;
   src->session = NULL;
@@ -437,6 +454,12 @@ gst_soup_http_src_set_property (GObject * object, guint prop_id,
       src->extra_headers = s ? gst_structure_copy (s) : NULL;
       break;
     }
+    case PROP_EXCLUDE_RANGE_HEADER:
+      src->exclude_range_header = g_value_get_boolean (value);
+      break;
+    case PROP_CONTENT_SIZE:
+      gst_soup_http_src_set_size (src, g_value_get_uint64 (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -498,6 +521,13 @@ gst_soup_http_src_get_property (GObject * object, guint prop_id,
     case PROP_EXTRA_HEADERS:
       gst_value_set_structure (value, src->extra_headers);
       break;
+    case PROP_EXCLUDE_RANGE_HEADER:
+      g_value_set_boolean (value, src->exclude_range_header);
+      break;
+    case PROP_CONTENT_SIZE:
+      g_value_set_uint64 (value, src->content_size);
+      break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -542,7 +572,7 @@ gst_soup_http_src_add_range_header (GstSoupHTTPSrc * src, guint64 offset,
   gint rc;
 
   soup_message_headers_remove (src->msg->request_headers, "Range");
-  if (offset || stop_offset != -1) {
+  if ((offset || stop_offset != -1) && (!src->exclude_range_header)) {
     if (stop_offset != -1) {
       rc = g_snprintf (buf, sizeof (buf), "bytes=%" G_GUINT64_FORMAT "-%"
           G_GUINT64_FORMAT, offset, stop_offset);
@@ -550,10 +580,21 @@ gst_soup_http_src_add_range_header (GstSoupHTTPSrc * src, guint64 offset,
       rc = g_snprintf (buf, sizeof (buf), "bytes=%" G_GUINT64_FORMAT "-",
           offset);
     }
-    if (rc > sizeof (buf) || rc < 0)
+    if (rc > sizeof (buf) || rc < 0) {
+      GST_INFO_OBJECT (src, "Not adding range to HEAD request");
       return FALSE;
+    }
+    GST_INFO_OBJECT (src, "Adding range to HEAD request");
     soup_message_headers_append (src->msg->request_headers, "Range", buf);
+  } else if ((src->msg->method == SOUP_METHOD_HEAD)
+      && (!src->exclude_range_header)) {
+    // If this is a HEAD request include range to get content length in case
+    // server does not include by default
+    GST_INFO_OBJECT (src, "Adding range to HEAD request");
+    soup_message_headers_append (src->msg->request_headers, "Range",
+        "bytes=0-");
   }
+
   src->read_position = offset;
   return TRUE;
 }
@@ -736,13 +777,10 @@ gst_soup_http_src_got_headers_cb (SoupMessage * msg, GstSoupHTTPSrc * src)
 {
   const char *value;
   GstTagList *tag_list;
-  GstBaseSrc *basesrc;
   guint64 newsize;
   GHashTable *params = NULL;
 
-  GST_DEBUG_OBJECT (src, "got headers:");
-  soup_message_headers_foreach (msg->response_headers,
-      gst_soup_http_src_headers_foreach, src);
+  gst_soup_http_src_log_http_info (src);
 
   if (msg->status_code == 407 && src->proxy_id && src->proxy_pw)
     return;
@@ -766,17 +804,12 @@ gst_soup_http_src_got_headers_cb (SoupMessage * msg, GstSoupHTTPSrc * src)
       SOUP_ENCODING_CONTENT_LENGTH) {
     newsize = src->request_position +
         soup_message_headers_get_content_length (msg->response_headers);
-    if (!src->have_size || (src->content_size != newsize)) {
-      src->content_size = newsize;
-      src->have_size = TRUE;
-      src->seekable = TRUE;
-      GST_DEBUG_OBJECT (src, "size = %" G_GUINT64_FORMAT, src->content_size);
-
-      basesrc = GST_BASE_SRC_CAST (src);
-      basesrc->segment.duration = src->content_size;
-      gst_element_post_message (GST_ELEMENT (src),
-          gst_message_new_duration_changed (GST_OBJECT (src)));
-    }
+    if (!src->have_size || (src->content_size != newsize))
+      gst_soup_http_src_set_size (src, newsize);
+  } else {
+    /* Use HEAD response headers to determine content size if content-length not included */
+    GST_INFO_OBJECT (src, "Determine size based on HTTP HEAD response headers");
+    gst_soup_http_src_determine_size (src);
   }
 
   /* Icecast stuff */
@@ -880,7 +913,9 @@ gst_soup_http_src_got_headers_cb (SoupMessage * msg, GstSoupHTTPSrc * src)
 
   /* Check if Range header was respected. */
   if (src->ret == GST_FLOW_CUSTOM_ERROR &&
-      src->read_position && msg->status_code != SOUP_STATUS_PARTIAL_CONTENT) {
+      src->read_position &&
+      (msg->status_code != SOUP_STATUS_PARTIAL_CONTENT &&
+          msg->status_code != SOUP_STATUS_OK)) {
     src->seekable = FALSE;
     GST_ELEMENT_ERROR (src, RESOURCE, SEEK,
         (_("Server does not support seeking.")),
@@ -1071,7 +1106,7 @@ gst_soup_http_src_got_chunk_cb (SoupMessage * msg, SoupBuffer * chunk,
   src->read_position = new_position;
 
   if (src->content_size != 0 && new_position > src->content_size) {
-    GST_DEBUG_OBJECT (src, "Got position previous estimated content size "
+    GST_INFO_OBJECT (src, "Got position previous estimated content size "
         "(%" G_GINT64_FORMAT " > %" G_GINT64_FORMAT ")", new_position,
         src->content_size);
     src->content_size = new_position;
@@ -1235,7 +1270,7 @@ gst_soup_http_src_do_request (GstSoupHTTPSrc * src, const gchar * method,
       gst_soup_http_src_add_range_header (src, src->request_position,
           src->stop_position);
     } else {
-      GST_DEBUG_OBJECT (src, "Seek from position %" G_GUINT64_FORMAT
+      GST_INFO_OBJECT (src, "Seek from position %" G_GUINT64_FORMAT
           " to %" G_GUINT64_FORMAT ": requeueing connection request",
           src->read_position, src->request_position);
       gst_soup_http_src_cancel_message (src);
@@ -1384,6 +1419,87 @@ gst_soup_http_src_get_size (GstBaseSrc * bsrc, guint64 * size)
   return FALSE;
 }
 
+static void
+gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src)
+{
+  const gchar *header_name, *header_value;
+  SoupMessageHeadersIter iter;
+
+  if (src->msg) {
+    GST_INFO_OBJECT (src, "REQUEST: %s %s HTTP/1.%d", src->msg->method,
+        soup_uri_to_string (soup_message_get_uri (src->msg), TRUE),
+        soup_message_get_http_version (src->msg));
+
+    GST_INFO_OBJECT (src, "REQUEST HEADERS:");
+    soup_message_headers_iter_init (&iter, src->msg->request_headers);
+    while (soup_message_headers_iter_next (&iter, &header_name, &header_value))
+      GST_INFO_OBJECT (src, "%s: %s", header_name, header_value);
+
+    GST_INFO_OBJECT (src, "RESPONSE: HTTP/1.%d %d %s",
+        soup_message_get_http_version (src->msg),
+        src->msg->status_code, src->msg->reason_phrase);
+
+    GST_INFO_OBJECT (src, "RESPONSE HEADERS:");
+    soup_message_headers_iter_init (&iter, src->msg->response_headers);
+    while (soup_message_headers_iter_next (&iter, &header_name, &header_value))
+      GST_INFO_OBJECT (src, "%s: %s", header_name, header_value);
+  } else {
+    GST_INFO_OBJECT (src, "Null soup http message");
+  }
+}
+
+static void
+gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
+{
+  guint64 size;
+  const gchar *header;
+  gchar *header_uppercase;
+  const gchar *format;
+
+  if (!src->msg) {
+    GST_INFO_OBJECT (src, "Unable to determine size due to null HTTP message");
+    return;
+  }
+
+  if (src->have_size) {
+    GST_INFO_OBJECT (src, "Already have size = %" G_GUINT64_FORMAT,
+        src->content_size);
+    return;
+  }
+
+  if ((header =
+          soup_message_headers_get_one (src->msg->response_headers,
+              "content-range")) != NULL) {
+    // Parse out size from string in format: bytes 0-168042671/168042672
+    format = "BYTES%*[^/]/%" G_GUINT64_FORMAT;
+  } else {
+    GST_INFO_OBJECT (src,
+        "Unable to get size due to no content range header available");
+    return;
+  }
+
+  // Convert to upper case
+  header_uppercase = g_ascii_strup (header, -1);
+  if (sscanf (header_uppercase, format, &size) != 1) {
+    GST_WARNING_OBJECT (src,
+        "Problems parsing BYTES from header using format %s in HEAD response: %s",
+        format, header);
+    g_free (header_uppercase);
+    return;
+  } else {
+    GST_INFO_OBJECT (src,
+        "Set size based on header %s in head response, size = %"
+        G_GUINT64_FORMAT, header, size);
+  }
+  g_free (header_uppercase);
+
+  // If now have size, update accordingly
+  if (size > 0)
+    gst_soup_http_src_set_size (src, size);
+  else
+    GST_INFO_OBJECT (src, "Got size 0 from content range header");
+}
+
 static gboolean
 gst_soup_http_src_is_seekable (GstBaseSrc * bsrc)
 {
@@ -1415,6 +1531,7 @@ gst_soup_http_src_is_seekable (GstBaseSrc * bsrc)
     gst_soup_http_src_cancel_message (src);
     g_mutex_unlock (&src->mutex);
   }
+  GST_INFO_OBJECT (src, "Is seekable?: %d", src->seekable);
 
   return src->seekable;
 }
@@ -1424,12 +1541,12 @@ gst_soup_http_src_do_seek (GstBaseSrc * bsrc, GstSegment * segment)
 {
   GstSoupHTTPSrc *src = GST_SOUP_HTTP_SRC (bsrc);
 
-  GST_DEBUG_OBJECT (src, "do_seek(%" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT
+  GST_INFO_OBJECT (src, "do_seek(%" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT
       ")", segment->start, segment->stop);
   if (src->read_position == segment->start &&
       src->request_position == src->read_position &&
       src->stop_position == segment->stop) {
-    GST_DEBUG_OBJECT (src,
+    GST_INFO_OBJECT (src,
         "Seek to current read/end position and no seek pending");
     return TRUE;
   }
@@ -1539,6 +1656,24 @@ gst_soup_http_src_set_proxy (GstSoupHTTPSrc * src, const gchar * uri)
     src->proxy = soup_uri_new (new_uri);
     g_free (new_uri);
   }
+
+  return TRUE;
+}
+
+static gboolean
+gst_soup_http_src_set_size (GstSoupHTTPSrc * src, guint64 new_size)
+{
+  GstBaseSrc *basesrc;
+  src->content_size = new_size;
+  src->have_size = TRUE;
+  src->seekable = TRUE;
+  GST_INFO_OBJECT (src, "Set seekable with size = %" G_GUINT64_FORMAT,
+      src->content_size);
+
+  basesrc = GST_BASE_SRC_CAST (src);
+  basesrc->segment.duration = src->content_size;
+  gst_element_post_message (GST_ELEMENT (src),
+      gst_message_new_duration_changed (GST_OBJECT (src)));
 
   return TRUE;
 }
