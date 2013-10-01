@@ -863,34 +863,27 @@ get_clock_rate (RTPSource * src, guint8 payload)
  * 50 milliseconds apart and arrive 60 milliseconds apart, then the jitter is 10
  * milliseconds. */
 static void
-calculate_jitter (RTPSource * src, GstBuffer * buffer,
-    RTPArrivalStats * arrival)
+calculate_jitter (RTPSource * src, RTPPacketInfo * pinfo)
 {
   GstClockTime running_time;
   guint32 rtparrival, transit, rtptime;
   gint32 diff;
   gint clock_rate;
   guint8 pt;
-  GstRTPBuffer rtp = { NULL };
 
   /* get arrival time */
-  if ((running_time = arrival->running_time) == GST_CLOCK_TIME_NONE)
+  if ((running_time = pinfo->running_time) == GST_CLOCK_TIME_NONE)
     goto no_time;
 
-  if (!gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp))
-    goto invalid_packet;
-
-  pt = gst_rtp_buffer_get_payload_type (&rtp);
+  pt = pinfo->pt;
 
   GST_LOG ("SSRC %08x got payload %d", src->ssrc, pt);
 
   /* get clockrate */
-  if ((clock_rate = get_clock_rate (src, pt)) == -1) {
-    gst_rtp_buffer_unmap (&rtp);
+  if ((clock_rate = get_clock_rate (src, pt)) == -1)
     goto no_clock_rate;
-  }
 
-  rtptime = gst_rtp_buffer_get_timestamp (&rtp);
+  rtptime = pinfo->rtptime;
 
   /* convert arrival time to RTP timestamp units, truncate to 32 bits, we don't
    * care about the absolute value, just the difference. */
@@ -919,18 +912,12 @@ calculate_jitter (RTPSource * src, GstBuffer * buffer,
   GST_LOG ("rtparrival %u, rtptime %u, clock-rate %d, diff %d, jitter: %f",
       rtparrival, rtptime, clock_rate, diff, (src->stats.jitter) / 16.0);
 
-  gst_rtp_buffer_unmap (&rtp);
   return;
 
   /* ERRORS */
 no_time:
   {
     GST_WARNING ("cannot get current running_time");
-    return;
-  }
-invalid_packet:
-  {
-    GST_WARNING ("invalid RTP packet");
     return;
   }
 no_clock_rate:
@@ -993,35 +980,29 @@ do_bitrate_estimation (RTPSource * src, GstClockTime running_time,
 /**
  * rtp_source_process_rtp:
  * @src: an #RTPSource
- * @buffer: an RTP buffer
+ * @pinfo: an #RTPPacketInfo
  *
- * Let @src handle the incomming RTP @buffer.
+ * Let @src handle the incomming RTP packet described in @pinfo.
  *
  * Returns: a #GstFlowReturn.
  */
 GstFlowReturn
-rtp_source_process_rtp (RTPSource * src, GstBuffer * buffer,
-    RTPArrivalStats * arrival)
+rtp_source_process_rtp (RTPSource * src, RTPPacketInfo * pinfo)
 {
   GstFlowReturn result = GST_FLOW_OK;
   guint16 seqnr, udelta;
   RTPSourceStats *stats;
   guint16 expected;
-  GstRTPBuffer rtp = { NULL };
 
   g_return_val_if_fail (RTP_IS_SOURCE (src), GST_FLOW_ERROR);
-  g_return_val_if_fail (GST_IS_BUFFER (buffer), GST_FLOW_ERROR);
+  g_return_val_if_fail (pinfo != NULL, GST_FLOW_ERROR);
 
   stats = &src->stats;
 
-  if (!gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp))
-    goto invalid_packet;
-
-  seqnr = gst_rtp_buffer_get_seq (&rtp);
-  gst_rtp_buffer_unmap (&rtp);
+  seqnr = pinfo->seqnum;
 
   if (stats->cycles == -1) {
-    GST_DEBUG ("received first buffer");
+    GST_DEBUG ("received first packet");
     /* first time we heard of this source */
     init_seq (src, seqnr);
     src->stats.max_seq = seqnr - 1;
@@ -1046,9 +1027,10 @@ rtp_source_process_rtp (RTPSource * src, GstBuffer * buffer,
       } else {
         GstBuffer *q;
 
-        GST_DEBUG ("probation %d: queue buffer", src->curr_probation);
+        GST_DEBUG ("probation %d: queue packet", src->curr_probation);
         /* when still in probation, keep packets in a list. */
-        g_queue_push_tail (src->packets, buffer);
+        g_queue_push_tail (src->packets, pinfo->data);
+        pinfo->data = NULL;
         /* remove packets from queue if there are too many */
         while (g_queue_get_length (src->packets) > RTP_MAX_PROBATION_LEN) {
           q = g_queue_pop_head (src->packets);
@@ -1084,40 +1066,34 @@ rtp_source_process_rtp (RTPSource * src, GstBuffer * buffer,
     GST_WARNING ("duplicate or reordered packet (seqnr %d)", seqnr);
   }
 
-  src->stats.octets_received += arrival->payload_len;
-  src->stats.bytes_received += arrival->bytes;
+  src->stats.octets_received += pinfo->payload_len;
+  src->stats.bytes_received += pinfo->bytes;
   src->stats.packets_received++;
   /* for the bitrate estimation */
-  src->bytes_received += arrival->payload_len;
+  src->bytes_received += pinfo->payload_len;
   /* the source that sent the packet must be a sender */
   src->is_sender = TRUE;
   src->validated = TRUE;
 
-  do_bitrate_estimation (src, arrival->running_time, &src->bytes_received);
+  do_bitrate_estimation (src, pinfo->running_time, &src->bytes_received);
 
   GST_LOG ("seq %d, PC: %" G_GUINT64_FORMAT ", OC: %" G_GUINT64_FORMAT,
       seqnr, src->stats.packets_received, src->stats.octets_received);
 
   /* calculate jitter for the stats */
-  calculate_jitter (src, buffer, arrival);
+  calculate_jitter (src, pinfo);
 
   /* we're ready to push the RTP packet now */
-  result = push_packet (src, buffer);
+  result = push_packet (src, pinfo->data);
+  pinfo->data = NULL;
 
 done:
   return result;
 
   /* ERRORS */
-invalid_packet:
-  {
-    GST_WARNING ("invalid packet received");
-    gst_buffer_unref (buffer);
-    return GST_FLOW_OK;
-  }
 bad_sequence:
   {
     GST_WARNING ("unacceptable seqnum received");
-    gst_buffer_unref (buffer);
     return GST_FLOW_OK;
   }
 probation_seqnum:
@@ -1125,7 +1101,6 @@ probation_seqnum:
     GST_WARNING ("probation: seqnr %d != expected %d", seqnr, expected);
     src->curr_probation = src->probation;
     src->stats.max_seq = seqnr;
-    gst_buffer_unref (buffer);
     return GST_FLOW_OK;
   }
 }
@@ -1168,68 +1143,30 @@ rtp_source_mark_bye (RTPSource * src, const gchar * reason)
  * Returns: a #GstFlowReturn.
  */
 GstFlowReturn
-rtp_source_send_rtp (RTPSource * src, gpointer data, gboolean is_list,
-    GstClockTime running_time)
+rtp_source_send_rtp (RTPSource * src, RTPPacketInfo * pinfo)
 {
   GstFlowReturn result;
-  guint len;
+  GstClockTime running_time;
   guint32 rtptime;
   guint64 ext_rtptime;
   guint64 rt_diff, rtp_diff;
-  GstBufferList *list = NULL;
-  GstBuffer *buffer = NULL;
-  guint packets;
-  GstRTPBuffer rtp = { NULL };
 
   g_return_val_if_fail (RTP_IS_SOURCE (src), GST_FLOW_ERROR);
-  g_return_val_if_fail (is_list || GST_IS_BUFFER (data), GST_FLOW_ERROR);
-
-  if (is_list) {
-    list = GST_BUFFER_LIST_CAST (data);
-
-    /* We can grab the caps from the first group, since all
-     * groups of a buffer list have same caps. */
-    buffer = gst_buffer_list_get (list, 0);
-    if (!buffer)
-      goto no_buffer;
-  } else {
-    buffer = GST_BUFFER_CAST (data);
-  }
 
   /* we are a sender now */
   src->is_sender = TRUE;
 
-  if (is_list) {
-    gint i;
-
-    /* Each group makes up a network packet. */
-    packets = gst_buffer_list_length (list);
-    for (i = 0, len = 0; i < packets; i++) {
-      if (!gst_rtp_buffer_map (gst_buffer_list_get (list, i), GST_MAP_READ,
-              &rtp))
-        goto invalid_packet;
-
-      len += gst_rtp_buffer_get_payload_len (&rtp);
-      gst_rtp_buffer_unmap (&rtp);
-    }
-    /* subsequent info taken from first list member */
-    gst_rtp_buffer_map (gst_buffer_list_get (list, 0), GST_MAP_READ, &rtp);
-  } else {
-    packets = 1;
-    if (!gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp))
-      goto invalid_packet;
-
-    len = gst_rtp_buffer_get_payload_len (&rtp);
-  }
-
   /* update stats for the SR */
-  src->stats.packets_sent += packets;
-  src->stats.octets_sent += len;
-  src->bytes_sent += len;
+  src->stats.packets_sent += pinfo->packets;
+  src->stats.octets_sent += pinfo->payload_len;
+  src->bytes_sent += pinfo->payload_len;
+
+  running_time = pinfo->running_time;
 
   do_bitrate_estimation (src, running_time, &src->bytes_sent);
 
-  rtptime = gst_rtp_buffer_get_timestamp (&rtp);
+  rtptime = pinfo->rtptime;
+
   ext_rtptime = src->last_rtptime;
   ext_rtptime = gst_rtp_buffer_ext_timestamp (&ext_rtptime, rtptime);
 
@@ -1253,36 +1190,21 @@ rtp_source_send_rtp (RTPSource * src, gpointer data, gboolean is_list,
   src->last_rtptime = ext_rtptime;
 
   /* push packet */
-  if (!src->callbacks.push_rtp) {
-    gst_rtp_buffer_unmap (&rtp);
+  if (!src->callbacks.push_rtp)
     goto no_callback;
-  }
-  gst_rtp_buffer_unmap (&rtp);
 
-  GST_LOG ("pushing RTP %s %" G_GUINT64_FORMAT, is_list ? "list" : "packet",
-      src->stats.packets_sent);
+  GST_LOG ("pushing RTP %s %" G_GUINT64_FORMAT,
+      pinfo->is_list ? "list" : "packet", src->stats.packets_sent);
 
-  result = src->callbacks.push_rtp (src, data, src->user_data);
+  result = src->callbacks.push_rtp (src, pinfo->data, src->user_data);
+  pinfo->data = NULL;
 
   return result;
 
   /* ERRORS */
-invalid_packet:
-  {
-    GST_WARNING ("invalid packet received");
-    gst_mini_object_unref (GST_MINI_OBJECT_CAST (data));
-    return GST_FLOW_OK;
-  }
-no_buffer:
-  {
-    GST_WARNING ("no buffers in buffer list");
-    gst_mini_object_unref (GST_MINI_OBJECT_CAST (data));
-    return GST_FLOW_OK;
-  }
 no_callback:
   {
     GST_WARNING ("no callback installed, dropping packet");
-    gst_mini_object_unref (GST_MINI_OBJECT_CAST (data));
     return GST_FLOW_OK;
   }
 }

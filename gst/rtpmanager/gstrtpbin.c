@@ -633,13 +633,13 @@ create_session (GstRtpBin * rtpbin, gint id)
   /* ERRORS */
 no_session:
   {
-    g_warning ("rtpbin: could not create gstrtpsession element");
+    g_warning ("rtpbin: could not create rtpsession element");
     return NULL;
   }
 no_demux:
   {
     gst_object_unref (session);
-    g_warning ("rtpbin: could not create gstrtpssrcdemux element");
+    g_warning ("rtpbin: could not create rtpssrcdemux element");
     return NULL;
   }
 }
@@ -1439,7 +1439,8 @@ create_stream (GstRtpBinSession * session, guint32 ssrc)
 
   /* link stuff */
   if (demux)
-    gst_element_link (buffer, demux);
+    gst_element_link_pads_full (buffer, "src", demux, "sink",
+        GST_PAD_LINK_CHECK_NOTHING);
 
   if (rtpbin->buffering) {
     guint64 last_out;
@@ -1465,13 +1466,13 @@ create_stream (GstRtpBinSession * session, guint32 ssrc)
   /* ERRORS */
 no_jitterbuffer:
   {
-    g_warning ("rtpbin: could not create gstrtpjitterbuffer element");
+    g_warning ("rtpbin: could not create rtpjitterbuffer element");
     return NULL;
   }
 no_demux:
   {
     gst_object_unref (buffer);
-    g_warning ("rtpbin: could not create gstrtpptdemux element");
+    g_warning ("rtpbin: could not create rtpptdemux element");
     return NULL;
   }
 }
@@ -2563,7 +2564,7 @@ new_ssrc_pad_found (GstElement * element, guint ssrc, GstPad * pad,
   srcpad = gst_element_get_static_pad (element, padname);
   g_free (padname);
   sinkpad = gst_element_get_static_pad (stream->buffer, "sink");
-  gst_pad_link (srcpad, sinkpad);
+  gst_pad_link_full (srcpad, sinkpad, GST_PAD_LINK_CHECK_NOTHING);
   gst_object_unref (sinkpad);
   gst_object_unref (srcpad);
 
@@ -2572,7 +2573,7 @@ new_ssrc_pad_found (GstElement * element, guint ssrc, GstPad * pad,
   srcpad = gst_element_get_static_pad (element, padname);
   g_free (padname);
   sinkpad = gst_element_get_request_pad (stream->buffer, "sink_rtcp");
-  gst_pad_link (srcpad, sinkpad);
+  gst_pad_link_full (srcpad, sinkpad, GST_PAD_LINK_CHECK_NOTHING);
   gst_object_unref (sinkpad);
   gst_object_unref (srcpad);
 
@@ -2598,7 +2599,7 @@ new_ssrc_pad_found (GstElement * element, guint ssrc, GstPad * pad,
     stream->demux_ptchange_sig = g_signal_connect (stream->demux,
         "payload-type-change", (GCallback) payload_type_change, session);
   } else {
-    /* add gstrtpjitterbuffer src pad to pads */
+    /* add rtpjitterbuffer src pad to pads */
     GstElementClass *klass;
     GstPadTemplate *templ;
     gchar *padname;
@@ -2649,7 +2650,6 @@ create_recv_rtp (GstRtpBin * rtpbin, GstPadTemplate * templ, const gchar * name)
   GstPad *sinkdpad;
   guint sessid;
   GstRtpBinSession *session;
-  GstPadLinkReturn lres;
 
   /* first get the session number */
   if (name == NULL || sscanf (name, "recv_rtp_sink_%u", &sessid) != 1)
@@ -2691,10 +2691,9 @@ create_recv_rtp (GstRtpBin * rtpbin, GstPadTemplate * templ, const gchar * name)
   GST_DEBUG_OBJECT (rtpbin, "getting demuxer RTP sink pad");
   sinkdpad = gst_element_get_static_pad (session->demux, "sink");
   GST_DEBUG_OBJECT (rtpbin, "linking demuxer RTP sink pad");
-  lres = gst_pad_link (session->recv_rtp_src, sinkdpad);
+  gst_pad_link_full (session->recv_rtp_src, sinkdpad,
+      GST_PAD_LINK_CHECK_NOTHING);
   gst_object_unref (sinkdpad);
-  if (lres != GST_PAD_LINK_OK)
-    goto link_failed;
 
   /* connect to the new-ssrc-pad signal of the SSRC demuxer */
   session->demux_newpad_sig = g_signal_connect (session->demux,
@@ -2724,11 +2723,6 @@ create_error:
 pad_failed:
   {
     g_warning ("rtpbin: failed to get session pad");
-    return NULL;
-  }
-link_failed:
-  {
-    g_warning ("rtpbin: failed to link pads");
     return NULL;
   }
 }
@@ -2771,7 +2765,6 @@ create_recv_rtcp (GstRtpBin * rtpbin, GstPadTemplate * templ,
   guint sessid;
   GstRtpBinSession *session;
   GstPad *sinkdpad;
-  GstPadLinkReturn lres;
 
   /* first get the session number */
   if (name == NULL || sscanf (name, "recv_rtcp_sink_%u", &sessid) != 1)
@@ -2808,10 +2801,8 @@ create_recv_rtcp (GstRtpBin * rtpbin, GstPadTemplate * templ,
 
   GST_DEBUG_OBJECT (rtpbin, "getting demuxer RTCP sink pad");
   sinkdpad = gst_element_get_static_pad (session->demux, "rtcp_sink");
-  lres = gst_pad_link (session->sync_src, sinkdpad);
+  gst_pad_link_full (session->sync_src, sinkdpad, GST_PAD_LINK_CHECK_NOTHING);
   gst_object_unref (sinkdpad);
-  if (lres != GST_PAD_LINK_OK)
-    goto link_failed;
 
   session->recv_rtcp_sink_ghost =
       gst_ghost_pad_new_from_template (name, session->recv_rtcp_sink, templ);
@@ -2835,11 +2826,6 @@ create_error:
 pad_failed:
   {
     g_warning ("rtpbin: failed to get session pad");
-    return NULL;
-  }
-link_failed:
-  {
-    g_warning ("rtpbin: failed to link pads");
     return NULL;
   }
 }

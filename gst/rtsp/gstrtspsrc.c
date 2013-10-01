@@ -267,7 +267,8 @@ static void gst_rtspsrc_handle_message (GstBin * bin, GstMessage * message);
 static gboolean gst_rtspsrc_setup_auth (GstRTSPSrc * src,
     GstRTSPMessage * response);
 
-static void gst_rtspsrc_loop_send_cmd (GstRTSPSrc * src, gint cmd, gint mask);
+static gboolean gst_rtspsrc_loop_send_cmd (GstRTSPSrc * src, gint cmd,
+    gint mask);
 static GstRTSPResult gst_rtspsrc_send_cb (GstRTSPExtension * ext,
     GstRTSPMessage * request, GstRTSPMessage * response, GstRTSPSrc * src);
 
@@ -2874,7 +2875,7 @@ gst_rtspsrc_stream_configure_tcp (GstRTSPSrc * src, GstRTSPStream * stream,
 
     /* allocate pads for sending the channel data into the manager */
     pad0 = gst_pad_new_from_template (template, "internalsrc_0");
-    gst_pad_link (pad0, stream->channelpad[0]);
+    gst_pad_link_full (pad0, stream->channelpad[0], GST_PAD_LINK_CHECK_NOTHING);
     gst_object_unref (stream->channelpad[0]);
     stream->channelpad[0] = pad0;
     gst_pad_set_event_function (pad0, gst_rtspsrc_handle_internal_src_event);
@@ -2887,7 +2888,8 @@ gst_rtspsrc_stream_configure_tcp (GstRTSPSrc * src, GstRTSPStream * stream,
        * manager. */
       pad1 = gst_pad_new_from_template (template, "internalsrc_1");
       gst_pad_set_event_function (pad1, gst_rtspsrc_handle_internal_src_event);
-      gst_pad_link (pad1, stream->channelpad[1]);
+      gst_pad_link_full (pad1, stream->channelpad[1],
+          GST_PAD_LINK_CHECK_NOTHING);
       gst_object_unref (stream->channelpad[1]);
       stream->channelpad[1] = pad1;
       gst_pad_set_active (pad1, TRUE);
@@ -2912,7 +2914,7 @@ gst_rtspsrc_stream_configure_tcp (GstRTSPSrc * src, GstRTSPStream * stream,
 
     /* and link */
     if (pad) {
-      gst_pad_link (pad, stream->rtcppad);
+      gst_pad_link_full (pad, stream->rtcppad, GST_PAD_LINK_CHECK_NOTHING);
       gst_object_unref (pad);
     }
 
@@ -3101,7 +3103,8 @@ gst_rtspsrc_stream_configure_udp (GstRTSPSrc * src, GstRTSPStream * stream,
       GST_DEBUG_OBJECT (src, "connecting UDP source 0 to manager");
       /* configure for UDP delivery, we need to connect the UDP pads to
        * the session plugin. */
-      gst_pad_link (*outpad, stream->channelpad[0]);
+      gst_pad_link_full (*outpad, stream->channelpad[0],
+          GST_PAD_LINK_CHECK_NOTHING);
       gst_object_unref (*outpad);
       *outpad = NULL;
       /* we connected to pad-added signal to get pads from the manager */
@@ -3127,7 +3130,8 @@ gst_rtspsrc_stream_configure_udp (GstRTSPSrc * src, GstRTSPStream * stream,
       GST_DEBUG_OBJECT (src, "connecting UDP source 1 to manager");
 
       pad = gst_element_get_static_pad (stream->udpsrc[1], "src");
-      gst_pad_link (pad, stream->channelpad[1]);
+      gst_pad_link_full (pad, stream->channelpad[1],
+          GST_PAD_LINK_CHECK_NOTHING);
       gst_object_unref (pad);
     } else {
       /* leave unlinked */
@@ -3216,7 +3220,8 @@ gst_rtspsrc_stream_configure_udp_sinks (GstRTSPSrc * src,
     gst_object_ref (stream->fakesrc);
     gst_bin_add (GST_BIN_CAST (src), stream->fakesrc);
 
-    gst_element_link (stream->fakesrc, stream->udpsink[0]);
+    gst_element_link_pads_full (stream->fakesrc, "src", stream->udpsink[0],
+        "sink", GST_PAD_LINK_CHECK_NOTHING);
   }
   if (do_rtcp) {
     GST_DEBUG_OBJECT (src, "configure RTCP UDP sink for %s:%d", destination,
@@ -3268,7 +3273,7 @@ gst_rtspsrc_stream_configure_udp_sinks (GstRTSPSrc * src,
 
     /* and link */
     if (pad) {
-      gst_pad_link (pad, stream->rtcppad);
+      gst_pad_link_full (pad, stream->rtcppad, GST_PAD_LINK_CHECK_NOTHING);
       gst_object_unref (pad);
     }
   }
@@ -4455,10 +4460,11 @@ gst_rtspsrc_loop_end_cmd (GstRTSPSrc * src, gint cmd, GstRTSPResult ret)
     gst_rtspsrc_loop_error_cmd (src, cmd);
 }
 
-static void
+static gboolean
 gst_rtspsrc_loop_send_cmd (GstRTSPSrc * src, gint cmd, gint mask)
 {
   gint old;
+  gboolean flushed = FALSE;
 
   /* start new request */
   gst_rtspsrc_loop_start_cmd (src, cmd);
@@ -4484,12 +4490,15 @@ gst_rtspsrc_loop_send_cmd (GstRTSPSrc * src, gint cmd, gint mask)
   if (src->busy_cmd & mask) {
     GST_DEBUG_OBJECT (src, "connection flush busy %d", src->busy_cmd);
     gst_rtspsrc_connection_flush (src, TRUE);
+    flushed = TRUE;
   } else {
     GST_DEBUG_OBJECT (src, "not interrupting busy cmd %d", src->busy_cmd);
   }
   if (src->task)
     gst_task_start (src->task);
   GST_OBJECT_UNLOCK (src);
+
+  return flushed;
 }
 
 static gboolean
@@ -6962,7 +6971,7 @@ gst_rtspsrc_thread (GstRTSPSrc * src)
   GST_OBJECT_LOCK (src);
   cmd = src->pending_cmd;
   if (cmd == CMD_RECONNECT || cmd == CMD_PLAY || cmd == CMD_PAUSE
-      || cmd == CMD_LOOP)
+      || cmd == CMD_LOOP || cmd == CMD_OPEN)
     src->pending_cmd = CMD_LOOP;
   else
     src->pending_cmd = CMD_WAIT;
@@ -7097,10 +7106,11 @@ gst_rtspsrc_change_state (GstElement * element, GstStateChange transition)
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
       /* unblock the tcp tasks and make the loop waiting */
-      gst_rtspsrc_loop_send_cmd (rtspsrc, CMD_WAIT, CMD_LOOP);
-      /* make sure it is waiting before we send PAUSE or PLAY below */
-      GST_RTSP_STREAM_LOCK (rtspsrc);
-      GST_RTSP_STREAM_UNLOCK (rtspsrc);
+      if (gst_rtspsrc_loop_send_cmd (rtspsrc, CMD_WAIT, CMD_LOOP)) {
+        /* make sure it is waiting before we send PAUSE or PLAY below */
+        GST_RTSP_STREAM_LOCK (rtspsrc);
+        GST_RTSP_STREAM_UNLOCK (rtspsrc);
+      }
       break;
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       break;

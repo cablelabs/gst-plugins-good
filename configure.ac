@@ -5,7 +5,7 @@ dnl please read gstreamer/docs/random/autotools before changing this file
 dnl initialize autoconf
 dnl releases only do -Wall, git and prerelease does -Werror too
 dnl use a three digit version number for releases, and four for git/pre
-AC_INIT([GStreamer Good Plug-ins],[1.1.4.1],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-good])
+AC_INIT([GStreamer Good Plug-ins],[1.3.0.1],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-good])
 
 AG_GST_INIT
 
@@ -43,11 +43,11 @@ AC_DEFINE_UNQUOTED(GST_API_VERSION, "$GST_API_VERSION",
   [GStreamer API Version])
 
 AG_GST_LIBTOOL_PREPARE
-AS_LIBTOOL(GST, 104, 0, 104)
+AS_LIBTOOL(GST, 300, 0, 300)
 
 dnl *** required versions of GStreamer stuff ***
-GST_REQ=1.1.4.1
-GSTPB_REQ=1.1.4.1
+GST_REQ=1.3.0.1
+GSTPB_REQ=1.3.0.1
 
 dnl *** autotools stuff ****
 
@@ -728,7 +728,6 @@ dnl *** aalib ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_AALIB, true)
 AG_GST_CHECK_FEATURE(AALIB, [aalib ASCII Art library], aasink, [
   AM_PATH_AALIB(, HAVE_AALIB=yes, HAVE_AALIB=no)
-  AS_SCRUB_INCLUDE(AALIB_CFLAGS)
 ])
 
 dnl *** cairo ***
