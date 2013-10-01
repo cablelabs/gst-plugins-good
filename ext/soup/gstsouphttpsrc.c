@@ -1500,17 +1500,16 @@ gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
     GST_INFO_OBJECT (src, "Got size 0 from content range header");
 }
 
-static gboolean
-gst_soup_http_src_is_seekable (GstBaseSrc * bsrc)
+static void
+gst_soup_http_src_check_seekable (GstSoupHTTPSrc * src)
 {
-  GstSoupHTTPSrc *src = GST_SOUP_HTTP_SRC (bsrc);
   GstFlowReturn ret = GST_FLOW_OK;
 
   /* Special case to check if the server allows range requests
    * before really starting to get data in the buffer creation
    * loops.
    */
-  if (!src->got_headers && GST_STATE (src) != GST_STATE_NULL) {
+  if (!src->got_headers && GST_STATE (src) >= GST_STATE_PAUSED) {
     g_mutex_lock (&src->mutex);
     while (!src->got_headers && !src->interrupted && ret == GST_FLOW_OK) {
       if ((src->msg && src->msg->method != SOUP_METHOD_HEAD) &&
@@ -1531,7 +1530,15 @@ gst_soup_http_src_is_seekable (GstBaseSrc * bsrc)
     gst_soup_http_src_cancel_message (src);
     g_mutex_unlock (&src->mutex);
   }
-  GST_INFO_OBJECT (src, "Is seekable?: %d", src->seekable);
+
+}
+
+static gboolean
+gst_soup_http_src_is_seekable (GstBaseSrc * bsrc)
+{
+  GstSoupHTTPSrc *src = GST_SOUP_HTTP_SRC (bsrc);
+
+  gst_soup_http_src_check_seekable (src);
 
   return src->seekable;
 }
@@ -1551,7 +1558,11 @@ gst_soup_http_src_do_seek (GstBaseSrc * bsrc, GstSegment * segment)
     return TRUE;
   }
 
-  if (!src->seekable) {
+  gst_soup_http_src_check_seekable (src);
+
+  /* If we have no headers we don't know yet if it is seekable or not.
+   * Store the start position and error out later if it isn't */
+  if (src->got_headers && !src->seekable) {
     GST_WARNING_OBJECT (src, "Not seekable");
     return FALSE;
   }

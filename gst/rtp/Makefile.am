@@ -50,6 +50,8 @@ libgstrtp_la_SOURCES = \
 	gstrtpjpegpay.c \
 	gstrtpL16depay.c \
 	gstrtpL16pay.c \
+	gstrtpL24depay.c \
+	gstrtpL24pay.c \
 	gstasteriskh263.c \
 	gstrtpmp1sdepay.c \
 	gstrtpmp2tdepay.c \
@@ -100,6 +102,8 @@ noinst_HEADERS =			\
 	gstrtpchannels.h \
 	gstrtpL16depay.h \
 	gstrtpL16pay.h \
+	gstrtpL24depay.h \
+	gstrtpL24pay.h \
 	gstrtpac3depay.h \
 	gstrtpac3pay.h \
 	gstrtpbvdepay.h \

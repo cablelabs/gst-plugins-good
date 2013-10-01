@@ -171,7 +171,7 @@ static GstCaps
 /* stream methods */
 static void gst_matroska_demux_reset (GstElement * element);
 static gboolean perform_seek_to_offset (GstMatroskaDemux * demux,
-    gdouble rate, guint64 offset);
+    gdouble rate, guint64 offset, guint32 seqnum);
 
 /* gobject functions */
 static void gst_matroska_demux_set_property (GObject * object,
@@ -2196,7 +2196,7 @@ finish:
     /* upstream takes care of flushing and all that
      * ... and newsegment event handling takes care of the rest */
     return perform_seek_to_offset (demux, rate,
-        entry->pos + demux->common.ebml_segment_start);
+        entry->pos + demux->common.ebml_segment_start, seqnum);
   }
 
 exit:
@@ -2336,7 +2336,8 @@ gst_matroska_demux_handle_seek_push (GstMatroskaDemux * demux, GstPad * pad,
     if (!building_index) {
       /* seek to the first subindex or legacy index */
       GST_INFO_OBJECT (demux, "Seeking to Cues at %" G_GUINT64_FORMAT, offset);
-      return perform_seek_to_offset (demux, rate, offset);
+      return perform_seek_to_offset (demux, rate, offset,
+          gst_event_get_seqnum (event));
     }
 
     /* well, we are handling it already */
@@ -3005,8 +3006,25 @@ gst_matroska_demux_check_subtitle_buffer (GstElement * element,
   if (!gst_buffer_get_size (*buf) || !gst_buffer_map (*buf, &map, GST_MAP_READ))
     return GST_FLOW_OK;
 
+  /* Need \0-terminator at the end */
+  if (map.data[map.size - 1] != '\0') {
+    newbuf = gst_buffer_new_and_alloc (map.size + 1);
+
+    /* Copy old buffer and add a 0 at the end */
+    gst_buffer_fill (newbuf, 0, map.data, map.size);
+    gst_buffer_memset (newbuf, map.size, 0, 1);
+    gst_buffer_unmap (*buf, &map);
+
+    gst_buffer_copy_into (newbuf, *buf,
+        GST_BUFFER_COPY_TIMESTAMPS | GST_BUFFER_COPY_FLAGS |
+        GST_BUFFER_COPY_META, 0, -1);
+    gst_buffer_unref (*buf);
+    *buf = newbuf;
+    gst_buffer_map (*buf, &map, GST_MAP_READ);
+  }
+
   if (!sub_stream->invalid_utf8) {
-    if (g_utf8_validate ((gchar *) map.data, map.size, NULL)) {
+    if (g_utf8_validate ((gchar *) map.data, map.size - 1, NULL)) {
       goto next;
     }
     GST_WARNING_OBJECT (element, "subtitle stream %" G_GUINT64_FORMAT
@@ -3059,6 +3077,7 @@ gst_matroska_demux_check_subtitle_buffer (GstElement * element,
   gst_buffer_map (*buf, &map, GST_MAP_READ);
 
 next:
+
   if (sub_stream->check_markup) {
     /* caps claim markup text, so we need to escape text,
      * except if text is already markup and then needs no further escaping */
@@ -3734,6 +3753,12 @@ gst_matroska_demux_parse_blockgroup_or_simpleblock (GstMatroskaDemux * demux,
          Therefore, create an aligned copy if necessary. */
       g_assert (stream->alignment <= G_MEM_ALIGN);
       sub = gst_matroska_demux_align_buffer (demux, sub, stream->alignment);
+
+      if (GST_BUFFER_PTS_IS_VALID (sub)) {
+        stream->pos = GST_BUFFER_PTS (sub);
+        if (GST_BUFFER_DURATION_IS_VALID (sub))
+          stream->pos += GST_BUFFER_DURATION (sub);
+      }
 
       ret = gst_pad_push (stream->pad, sub);
 
@@ -4664,7 +4689,8 @@ pause:
  * Create and push a flushing seek event upstream
  */
 static gboolean
-perform_seek_to_offset (GstMatroskaDemux * demux, gdouble rate, guint64 offset)
+perform_seek_to_offset (GstMatroskaDemux * demux, gdouble rate, guint64 offset,
+    guint32 seqnum)
 {
   GstEvent *event;
   gboolean res = 0;
@@ -4675,6 +4701,7 @@ perform_seek_to_offset (GstMatroskaDemux * demux, gdouble rate, guint64 offset)
       gst_event_new_seek (rate, GST_FORMAT_BYTES,
       GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, GST_SEEK_TYPE_SET, offset,
       GST_SEEK_TYPE_NONE, -1);
+  gst_event_set_seqnum (event, seqnum);
 
   res = gst_pad_push_event (demux->common.sinkpad, event);
 
