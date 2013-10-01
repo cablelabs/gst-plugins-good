@@ -1129,6 +1129,9 @@ gst_flac_parse_handle_picture (GstFlacParse * flacparse, GstBuffer * buffer)
   if (!gst_byte_reader_get_uint32_be (&reader, &img_len))
     goto error;
 
+  if (gst_byte_reader_get_pos (&reader) + img_len > map.size)
+    goto error;
+
   if (!flacparse->tags)
     flacparse->tags = gst_tag_list_new_empty ();
 
@@ -1225,7 +1228,7 @@ _value_array_append_buffer (GValue * array_val, GstBuffer * buf)
   g_value_unset (&value);
 }
 
-static gboolean
+static GstFlowReturn
 gst_flac_parse_handle_headers (GstFlacParse * flacparse)
 {
   GstBuffer *vorbiscomment = NULL;
@@ -1234,7 +1237,7 @@ gst_flac_parse_handle_headers (GstFlacParse * flacparse)
   GValue array = { 0, };
   GstCaps *caps;
   GList *l;
-  gboolean res = TRUE;
+  GstFlowReturn res = GST_FLOW_OK;
 
   caps = gst_caps_new_simple ("audio/x-flac",
       "channels", G_TYPE_INT, flacparse->channels,
@@ -1336,7 +1339,6 @@ push_headers:
    * negotiated caps will change to caps that include the streamheader field */
   while (flacparse->headers) {
     GstBuffer *buf = GST_BUFFER (flacparse->headers->data);
-    GstFlowReturn ret;
     GstBaseParseFrame frame;
 
     flacparse->headers =
@@ -1347,12 +1349,10 @@ push_headers:
     gst_base_parse_frame_init (&frame);
     frame.buffer = buf;
     frame.overhead = -1;
-    ret = gst_base_parse_push_frame (GST_BASE_PARSE (flacparse), &frame);
-    if (ret != GST_FLOW_OK) {
-      res = FALSE;
-      break;
-    }
+    res = gst_base_parse_push_frame (GST_BASE_PARSE (flacparse), &frame);
     gst_base_parse_frame_free (&frame);
+    if (res != GST_FLOW_OK)
+      break;
   }
   g_list_foreach (flacparse->headers, (GFunc) gst_mini_object_unref, NULL);
   g_list_free (flacparse->headers);
@@ -1579,13 +1579,15 @@ gst_flac_parse_parse_frame (GstBaseParse * parse, GstBaseParseFrame * frame,
     }
 
     if (is_last) {
-      if (!gst_flac_parse_handle_headers (flacparse))
-        goto cleanup;
+      res = gst_flac_parse_handle_headers (flacparse);
 
       /* Minimal size of a frame header */
       gst_base_parse_set_min_frame_size (GST_BASE_PARSE (flacparse), MAX (9,
               flacparse->min_framesize));
       flacparse->state = GST_FLAC_PARSE_STATE_DATA;
+
+      if (res != GST_FLOW_OK)
+        goto cleanup;
     }
 
     /* DROPPED because we pushed already or will push all headers manually */
@@ -1618,18 +1620,18 @@ gst_flac_parse_parse_frame (GstBaseParse * parse, GstBaseParseFrame * frame,
         GST_WARNING_OBJECT (flacparse,
             "Generating headers for variable blocksize streams not supported");
 
-        if (!gst_flac_parse_handle_headers (flacparse))
-          goto cleanup;
+        res = gst_flac_parse_handle_headers (flacparse);
       } else {
         GST_DEBUG_OBJECT (flacparse, "Generating headers");
 
         if (!gst_flac_parse_generate_headers (flacparse))
           goto cleanup;
 
-        if (!gst_flac_parse_handle_headers (flacparse))
-          goto cleanup;
+        res = gst_flac_parse_handle_headers (flacparse);
       }
       flacparse->state = GST_FLAC_PARSE_STATE_DATA;
+      if (res != GST_FLOW_OK)
+        goto cleanup;
     }
 
     /* also cater for oggmux metadata */
