@@ -1509,7 +1509,7 @@ gst_soup_http_src_check_seekable (GstSoupHTTPSrc * src)
    * before really starting to get data in the buffer creation
    * loops.
    */
-  if (!src->got_headers && GST_STATE (src) >= GST_STATE_PAUSED) {
+  if (!src->got_headers && GST_STATE (src) >= GST_STATE_READY) {
     g_mutex_lock (&src->mutex);
     while (!src->got_headers && !src->interrupted && ret == GST_FLOW_OK) {
       if ((src->msg && src->msg->method != SOUP_METHOD_HEAD) &&
