@@ -37,7 +37,7 @@ plugin_init (GstPlugin * plugin)
           GST_TYPE_APEV2_MUX))
     return FALSE;
 
-  gst_tag_register_musicbrainz_tags ();
+  gst_tag_init ();
 
   return TRUE;
 }

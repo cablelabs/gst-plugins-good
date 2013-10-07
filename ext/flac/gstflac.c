@@ -48,7 +48,7 @@ plugin_init (GstPlugin * plugin)
           gst_flac_tag_get_type ()))
     return FALSE;
 
-  gst_tag_register_musicbrainz_tags ();
+  gst_tag_init ();
 
   return TRUE;
 }

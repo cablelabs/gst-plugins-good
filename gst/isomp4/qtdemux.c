@@ -489,7 +489,7 @@ gst_qtdemux_class_init (GstQTDemuxClass * klass)
   gstelement_class->get_index = GST_DEBUG_FUNCPTR (gst_qtdemux_get_index);
 #endif
 
-  gst_tag_register_musicbrainz_tags ();
+  gst_tag_init ();
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_qtdemux_sink_template));

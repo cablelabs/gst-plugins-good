@@ -277,7 +277,7 @@ plugin_init (GstPlugin * plugin)
   GST_DEBUG_CATEGORY_INIT (id3demux_debug, "id3demux", 0,
       "GStreamer ID3 tag demuxer");
 
-  gst_tag_register_musicbrainz_tags ();
+  gst_tag_init ();
 
   return gst_element_register (plugin, "id3demux",
       GST_RANK_PRIMARY, GST_TYPE_ID3DEMUX);
