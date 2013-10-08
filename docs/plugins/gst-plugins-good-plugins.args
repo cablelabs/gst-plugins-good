@@ -484,7 +484,7 @@
 <RANGE></RANGE>
 <FLAGS>rw</FLAGS>
 <NICK>Multicast Group</NICK>
-<BLURB>The Address of multicast group to join.</BLURB>
+<BLURB>The Address of multicast group to join. DEPRECATED: Use address property instead.</BLURB>
 <DEFAULT>"0.0.0.0"</DEFAULT>
 </ARG>
 
@@ -635,6 +635,16 @@
 <FLAGS>rw</FLAGS>
 <NICK>Bind Address</NICK>
 <BLURB>Address to bind the socket to. This is equivalent to the multicast-group property.</BLURB>
+<DEFAULT>"0.0.0.0"</DEFAULT>
+</ARG>
+
+<ARG>
+<NAME>GstUDPSrc::address</NAME>
+<TYPE>gchar*</TYPE>
+<RANGE></RANGE>
+<FLAGS>rw</FLAGS>
+<NICK>Address</NICK>
+<BLURB>Address to receive packets for. This is equivalent to the multicast-group property for now.</BLURB>
 <DEFAULT>"0.0.0.0"</DEFAULT>
 </ARG>
 
@@ -3879,6 +3889,16 @@
 </ARG>
 
 <ARG>
+<NAME>GstAutoAudioSink::sync</NAME>
+<TYPE>gboolean</TYPE>
+<RANGE></RANGE>
+<FLAGS>rw</FLAGS>
+<NICK>Sync</NICK>
+<BLURB>Sync on the clock.</BLURB>
+<DEFAULT>TRUE</DEFAULT>
+</ARG>
+
+<ARG>
 <NAME>GstAutoVideoSink::filter-caps</NAME>
 <TYPE>GstCaps*</TYPE>
 <RANGE></RANGE>
@@ -3896,6 +3916,16 @@
 <NICK>TS Offset</NICK>
 <BLURB>Timestamp offset in nanoseconds.</BLURB>
 <DEFAULT>0</DEFAULT>
+</ARG>
+
+<ARG>
+<NAME>GstAutoVideoSink::sync</NAME>
+<TYPE>gboolean</TYPE>
+<RANGE></RANGE>
+<FLAGS>rw</FLAGS>
+<NICK>Sync</NICK>
+<BLURB>Sync on the clock.</BLURB>
+<DEFAULT>TRUE</DEFAULT>
 </ARG>
 
 <ARG>
@@ -21302,7 +21332,7 @@
 <NAME>GstRtpJitterBuffer::rtx-delay</NAME>
 <TYPE>gint</TYPE>
 <RANGE>>= G_MAXULONG</RANGE>
-<FLAGS>r</FLAGS>
+<FLAGS>rw</FLAGS>
 <NICK>RTX Delay</NICK>
 <BLURB>Extra time in ms to wait before sending retransmission event (-1 automatic).</BLURB>
 <DEFAULT>20</DEFAULT>
@@ -21312,7 +21342,7 @@
 <NAME>GstRtpJitterBuffer::rtx-delay-reorder</NAME>
 <TYPE>gint</TYPE>
 <RANGE>>= G_MAXULONG</RANGE>
-<FLAGS>r</FLAGS>
+<FLAGS>rw</FLAGS>
 <NICK>RTX Delay Reorder</NICK>
 <BLURB>Sending retransmission event when this much reordering (-1 automatic).</BLURB>
 <DEFAULT>3</DEFAULT>
@@ -21322,7 +21352,7 @@
 <NAME>GstRtpJitterBuffer::rtx-retry-period</NAME>
 <TYPE>gint</TYPE>
 <RANGE>>= G_MAXULONG</RANGE>
-<FLAGS>r</FLAGS>
+<FLAGS>rw</FLAGS>
 <NICK>RTX Retry Period</NICK>
 <BLURB>Try to get a retransmission for this many ms (-1 automatic).</BLURB>
 <DEFAULT>160</DEFAULT>
@@ -21332,7 +21362,7 @@
 <NAME>GstRtpJitterBuffer::rtx-retry-timeout</NAME>
 <TYPE>gint</TYPE>
 <RANGE>>= G_MAXULONG</RANGE>
-<FLAGS>r</FLAGS>
+<FLAGS>rw</FLAGS>
 <NICK>RTX Retry Timeout</NICK>
 <BLURB>Retry sending a transmission event after this timeout in ms (-1 automatic).</BLURB>
 <DEFAULT>40</DEFAULT>
@@ -22084,7 +22114,7 @@
 <RANGE></RANGE>
 <FLAGS>rwx</FLAGS>
 <NICK>Streamable</NICK>
-<BLURB>If set to true, the output should be as if it is to be streamed and hence no indexes written or duration written.</BLURB>
+<BLURB>If set to true, the output should be as if it is to be streamed and hence no indexes written or duration written. (DEPRECATED, only valid for fragmented MP4).</BLURB>
 <DEFAULT>FALSE</DEFAULT>
 </ARG>
 
@@ -22214,7 +22244,7 @@
 <RANGE></RANGE>
 <FLAGS>rwx</FLAGS>
 <NICK>Streamable</NICK>
-<BLURB>If set to true, the output should be as if it is to be streamed and hence no indexes written or duration written.</BLURB>
+<BLURB>If set to true, the output should be as if it is to be streamed and hence no indexes written or duration written. (DEPRECATED, only valid for fragmented MP4).</BLURB>
 <DEFAULT>FALSE</DEFAULT>
 </ARG>
 
@@ -22304,7 +22334,7 @@
 <RANGE></RANGE>
 <FLAGS>rwx</FLAGS>
 <NICK>Streamable</NICK>
-<BLURB>If set to true, the output should be as if it is to be streamed and hence no indexes written or duration written.</BLURB>
+<BLURB>If set to true, the output should be as if it is to be streamed and hence no indexes written or duration written. (DEPRECATED, only valid for fragmented MP4).</BLURB>
 <DEFAULT>FALSE</DEFAULT>
 </ARG>
 
@@ -22395,7 +22425,7 @@
 <FLAGS>rwx</FLAGS>
 <NICK>Streamable</NICK>
 <BLURB>If set to true, the output should be as if it is to be streamed and hence no indexes written or duration written.</BLURB>
-<DEFAULT>FALSE</DEFAULT>
+<DEFAULT>TRUE</DEFAULT>
 </ARG>
 
 <ARG>
@@ -22574,7 +22604,7 @@
 <RANGE></RANGE>
 <FLAGS>rwx</FLAGS>
 <NICK>Streamable</NICK>
-<BLURB>If set to true, the output should be as if it is to be streamed and hence no indexes written or duration written.</BLURB>
+<BLURB>If set to true, the output should be as if it is to be streamed and hence no indexes written or duration written. (DEPRECATED, only valid for fragmented MP4).</BLURB>
 <DEFAULT>FALSE</DEFAULT>
 </ARG>
 

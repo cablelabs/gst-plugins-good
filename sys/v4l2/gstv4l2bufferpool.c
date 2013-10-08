@@ -63,7 +63,8 @@ GType
 gst_v4l2_meta_api_get_type (void)
 {
   static volatile GType type;
-  static const gchar *tags[] = { "memory", NULL };
+  static const gchar *tags[] =
+      { GST_META_TAG_VIDEO_STR, GST_META_TAG_MEMORY_STR, NULL };
 
   if (g_once_init_enter (&type)) {
     GType _type = gst_meta_api_type_register ("GstV4l2MetaAPI", tags);
@@ -247,8 +248,22 @@ gst_v4l2_buffer_pool_alloc_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
         offs = 0;
         for (i = 0; i < n_planes; i++) {
           offset[i] = offs;
-          stride[i] =
-              GST_VIDEO_FORMAT_INFO_SCALE_WIDTH (finfo, i, obj->bytesperline);
+
+          switch (info->finfo->format) {
+            case GST_VIDEO_FORMAT_NV12:
+            case GST_VIDEO_FORMAT_NV21:
+            case GST_VIDEO_FORMAT_NV16:
+            case GST_VIDEO_FORMAT_NV24:
+              stride[i] =
+                  (i == 0 ? 1 : 2) * GST_VIDEO_FORMAT_INFO_SCALE_WIDTH (finfo,
+                  i, obj->bytesperline);
+              break;
+            default:
+              stride[i] =
+                  GST_VIDEO_FORMAT_INFO_SCALE_WIDTH (finfo, i,
+                  obj->bytesperline);
+              break;
+          }
 
           offs +=
               stride[i] * GST_VIDEO_FORMAT_INFO_SCALE_HEIGHT (finfo, i, height);
@@ -432,7 +447,7 @@ gst_v4l2_buffer_pool_set_config (GstBufferPool * bpool, GstStructure * config)
   pool->copy_threshold = copy_threshold;
 
   if (obj->mode == GST_V4L2_IO_DMABUF)
-    allocator = gst_dmabuf_allocator_obtain ();
+    allocator = gst_dmabuf_allocator_new ();
 
   if (pool->allocator)
     gst_object_unref (pool->allocator);
@@ -667,9 +682,9 @@ gst_v4l2_buffer_pool_qbuf (GstV4l2BufferPool * pool, GstBuffer * buf)
   meta->vbuffer.bytesused = gst_buffer_get_size (buf);
 
   GST_LOG_OBJECT (pool,
-      "enqueue buffer %p, index:%d, queued:%d, flags:%08x used:%d",
+      "enqueue buffer %p, index:%d, queued:%d, flags:%08x mem:%p used:%d",
       buf, index, pool->num_queued, meta->vbuffer.flags,
-      meta->vbuffer.bytesused);
+      meta->mem, meta->vbuffer.bytesused);
 
   if (pool->buffers[index] != NULL)
     goto already_queued;
@@ -705,6 +720,7 @@ gst_v4l2_buffer_pool_dqbuf (GstV4l2BufferPool * pool, GstBuffer ** buffer)
   struct v4l2_buffer vbuffer;
   GstV4l2Object *obj = pool->obj;
   GstClockTime timestamp;
+  GstV4l2Meta *meta;
 
   if ((res = gst_v4l2_object_poll (obj)) != GST_FLOW_OK)
     goto poll_error;
@@ -735,10 +751,13 @@ gst_v4l2_buffer_pool_dqbuf (GstV4l2BufferPool * pool, GstBuffer ** buffer)
 
   timestamp = GST_TIMEVAL_TO_TIME (vbuffer.timestamp);
 
+  meta = GST_V4L2_META_GET (outbuf);
+  g_assert (meta != NULL);
+
   GST_LOG_OBJECT (pool,
-      "dequeued buffer %p seq:%d (ix=%d), used %d, flags %08x, ts %"
+      "dequeued buffer %p seq:%d (ix=%d), mem %p used %d, flags %08x, ts %"
       GST_TIME_FORMAT ", pool-queued=%d, buffer=%p", outbuf, vbuffer.sequence,
-      vbuffer.index, vbuffer.bytesused, vbuffer.flags,
+      vbuffer.index, meta->mem, vbuffer.bytesused, vbuffer.flags,
       GST_TIME_ARGS (timestamp), pool->num_queued, outbuf);
 
   /* set top/bottom field first if v4l2_buffer has the information */
@@ -749,9 +768,17 @@ gst_v4l2_buffer_pool_dqbuf (GstV4l2BufferPool * pool, GstBuffer ** buffer)
     GST_BUFFER_FLAG_UNSET (outbuf, GST_VIDEO_BUFFER_FLAG_TFF);
   }
 
-  /* this can change at every frame, esp. with jpeg */
-  if (obj->type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
-    gst_buffer_resize (outbuf, 0, vbuffer.bytesused);
+  /* The size can change at every frame, esp. with jpeg. The GstMemory
+   * inside the GstBuffer could have been changed by some other
+   * element, so just put back the original one. We always set it as
+   * no share, so if it's not there, it's not used at all.
+   */
+  if (obj->type == V4L2_BUF_TYPE_VIDEO_CAPTURE) {
+    gst_buffer_remove_all_memory (outbuf);
+    gst_buffer_append_memory (outbuf,
+        gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
+            meta->mem, vbuffer.length, 0, vbuffer.bytesused, NULL, NULL));
+  }
 
   GST_BUFFER_TIMESTAMP (outbuf) = timestamp;
 
@@ -867,8 +894,9 @@ gst_v4l2_buffer_pool_acquire_buffer (GstBufferPool * bpool, GstBuffer ** buffer,
             }
 #endif
 
-            /* copy the memory */
-            copy = gst_buffer_copy (*buffer);
+            /* copy the buffer */
+            copy = gst_buffer_copy_region (*buffer,
+                GST_BUFFER_COPY_ALL | GST_BUFFER_COPY_DEEP, 0, -1);
             GST_LOG_OBJECT (pool, "copy buffer %p->%p", *buffer, copy);
 
             /* and requeue so that we can continue capturing */

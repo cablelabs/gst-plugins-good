@@ -1,8 +1,8 @@
 
-Release notes for GStreamer Good Plugins 1.1.4
+Release notes for GStreamer Good Plugins 1.2.0
 
 
-The GStreamer team is proud to announce a new bug-fix release
+The GStreamer team is proud to announce a new feature release
 in the 1.x stable series of the
 core of the GStreamer streaming media framework.
 
@@ -57,20 +57,11 @@ contains a set of codecs plugins based on libav (formerly gst-ffmpeg)
 
 Bugs fixed in this release
      
-      * 705371 : souphttpsrc: Does network operations from the state change thread
-      * 590768 : GstPulseSrc should allow swapping the device used by the stream
-      * 637754 : multipartdemux: time stamp output buffer based on first input buffer not last
-      * 694445 : pulsesink: add support for AAC pass-through
-      * 700264 : qtdemux: ignores first editlist
-      * 702988 : gdkpixbufoverlay: crashes if any property changes during  playback when location property is not set
-      * 705108 : rtpgstpay: Add a config-interval property
-      * 705442 : matroskademux: prints warnings on seek
-      * 705449 : avidemux: sends stream_start event without group_id
-      * 705553 : rtph264pay: Entries of SPS and PPS duplicated
-      * 705760 : rtspsrc produces GLib error
-      * 705959 : souphttpsrc deprecated symbols
-      * 706076 : qtdemux: failed assertion for fragmented mp4 (DASH) streams
-      * 706642 : avimux: unmap the correct buffer
+      * 706083 : v4l2src: UVC Allocated buffers wrapped in GstBuffer get orphaned by GstBuffer API
+      * 707242 : qtmux: streamable and faststart property have no effect
+      * 707933 : matroskademux: Wrong UTF8 detection causes wrong detection of subtitle encoding
+      * 708501 : osxvideosink: fix segfault releasing the element
+      * 708622 : rtpjitterbuffer: fix various regressions
 
 ==== Download ====
 
@@ -107,21 +98,11 @@ subscribe to the gstreamer-devel list.
         
 Contributors to this release
     
-      * Akihiro Tsukada
       * Andoni Morales Alastruey
-      * Chris Bass
-      * David Schleef
       * Edward Hervey
-      * Kishore Arepalli
-      * Lubosz Sarnecki
-      * Matej Knopp
-      * Mathieu Duponchelle
-      * Michael Olbrich
       * Olivier Crête
+      * Robert Krakora
       * Sebastian Dröge
-      * Sjoerd Simons
-      * Thibault Saunier
       * Tim-Philipp Müller
       * Wim Taymans
-      * Youness Alaoui
  

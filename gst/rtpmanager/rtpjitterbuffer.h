@@ -25,6 +25,7 @@
 
 typedef struct _RTPJitterBuffer RTPJitterBuffer;
 typedef struct _RTPJitterBufferClass RTPJitterBufferClass;
+typedef struct _RTPJitterBufferItem RTPJitterBufferItem;
 
 #define RTP_TYPE_JITTER_BUFFER             (rtp_jitter_buffer_get_type())
 #define RTP_JITTER_BUFFER(src)             (G_TYPE_CHECK_INSTANCE_CAST((src),RTP_TYPE_JITTER_BUFFER,RTPJitterBuffer))
@@ -99,6 +100,32 @@ struct _RTPJitterBufferClass {
   GObjectClass   parent_class;
 };
 
+/**
+ * RTPJitterBufferItem:
+ * @data: the data of the item
+ * @next: pointer to next item
+ * @prev: pointer to previous item
+ * @type: the type of @data
+ * @dts: input DTS
+ * @pts: output PTS
+ * @seqnum: seqnum
+ * @count: amount of seqnum in this item
+ * @rtptime: rtp timestamp
+ *
+ * An object containing an RTP packet or event.
+ */
+struct _RTPJitterBufferItem {
+  gpointer data;
+  GList *next;
+  GList *prev;
+  guint type;
+  GstClockTime dts;
+  GstClockTime pts;
+  guint seqnum;
+  guint count;
+  guint rtptime;
+};
+
 GType rtp_jitter_buffer_get_type (void);
 
 /* managing lifetime */
@@ -110,16 +137,19 @@ void                  rtp_jitter_buffer_set_mode         (RTPJitterBuffer *jbuf,
 GstClockTime          rtp_jitter_buffer_get_delay        (RTPJitterBuffer *jbuf);
 void                  rtp_jitter_buffer_set_delay        (RTPJitterBuffer *jbuf, GstClockTime delay);
 
+void                  rtp_jitter_buffer_set_clock_rate   (RTPJitterBuffer *jbuf, guint32 clock_rate);
+guint32               rtp_jitter_buffer_get_clock_rate   (RTPJitterBuffer *jbuf);
+
 void                  rtp_jitter_buffer_reset_skew       (RTPJitterBuffer *jbuf);
 
-gboolean              rtp_jitter_buffer_insert           (RTPJitterBuffer *jbuf, GstBuffer *buf,
-                                                          GstClockTime time,
-                                                          guint32 clock_rate,
+gboolean              rtp_jitter_buffer_insert           (RTPJitterBuffer *jbuf,
+                                                          RTPJitterBufferItem *item,
                                                           gboolean *tail, gint *percent);
-GstBuffer *           rtp_jitter_buffer_peek             (RTPJitterBuffer *jbuf);
-GstBuffer *           rtp_jitter_buffer_pop              (RTPJitterBuffer *jbuf, gint *percent);
+RTPJitterBufferItem * rtp_jitter_buffer_peek             (RTPJitterBuffer *jbuf);
+RTPJitterBufferItem * rtp_jitter_buffer_pop              (RTPJitterBuffer *jbuf, gint *percent);
 
-void                  rtp_jitter_buffer_flush            (RTPJitterBuffer *jbuf);
+void                  rtp_jitter_buffer_flush            (RTPJitterBuffer *jbuf,
+                                                          GFunc free_func, gpointer user_data);
 
 gboolean              rtp_jitter_buffer_is_buffering     (RTPJitterBuffer * jbuf);
 void                  rtp_jitter_buffer_set_buffering    (RTPJitterBuffer * jbuf, gboolean buffering);
