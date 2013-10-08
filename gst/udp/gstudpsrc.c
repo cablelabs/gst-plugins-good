@@ -173,7 +173,7 @@ enum
   PROP_USED_SOCKET,
   PROP_AUTO_MULTICAST,
   PROP_REUSE,
-  PROP_BIND_ADDRESS,
+  PROP_ADDRESS,
 
   PROP_LAST
 };
@@ -226,9 +226,11 @@ gst_udpsrc_class_init (GstUDPSrcClass * klass)
       g_param_spec_int ("port", "Port",
           "The port to receive the packets from, 0=allocate", 0, G_MAXUINT16,
           UDP_DEFAULT_PORT, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  /* FIXME 2.0: Remove multicast-group property */
   g_object_class_install_property (gobject_class, PROP_MULTICAST_GROUP,
       g_param_spec_string ("multicast-group", "Multicast Group",
-          "The Address of multicast group to join", UDP_DEFAULT_MULTICAST_GROUP,
+          "The Address of multicast group to join. DEPRECATED: "
+          "Use address property instead", UDP_DEFAULT_MULTICAST_GROUP,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class, PROP_MULTICAST_IFACE,
       g_param_spec_string ("multicast-iface", "Multicast Interface",
@@ -278,16 +280,10 @@ gst_udpsrc_class_init (GstUDPSrcClass * klass)
   g_object_class_install_property (gobject_class, PROP_REUSE,
       g_param_spec_boolean ("reuse", "Reuse", "Enable reuse of the port",
           UDP_DEFAULT_REUSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  /* FIXME 2.0: multicast-group and bind-address should
-   * be separated, the former only being the multicast group and
-   * the latter always being the address the socket is bound too,
-   * even if a multicast group is given.
-   */
-  g_object_class_install_property (gobject_class, PROP_BIND_ADDRESS,
-      g_param_spec_string ("bind-address", "Bind Address",
-          "Address to bind the socket to. This is equivalent to the "
-          "multicast-group property", UDP_DEFAULT_MULTICAST_GROUP,
+  g_object_class_install_property (gobject_class, PROP_ADDRESS,
+      g_param_spec_string ("address", "Address",
+          "Address to receive packets for. This is equivalent to the "
+          "multicast-group property for now", UDP_DEFAULT_MULTICAST_GROUP,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_add_pad_template (gstelement_class,
@@ -315,7 +311,7 @@ gst_udpsrc_init (GstUDPSrc * udpsrc)
       g_strdup_printf ("udp://%s:%u", UDP_DEFAULT_MULTICAST_GROUP,
       UDP_DEFAULT_PORT);
 
-  udpsrc->multi_group = g_strdup (UDP_DEFAULT_MULTICAST_GROUP);
+  udpsrc->address = g_strdup (UDP_DEFAULT_MULTICAST_GROUP);
   udpsrc->port = UDP_DEFAULT_PORT;
   udpsrc->socket = UDP_DEFAULT_SOCKET;
   udpsrc->multi_iface = g_strdup (UDP_DEFAULT_MULTICAST_IFACE);
@@ -356,8 +352,8 @@ gst_udpsrc_finalize (GObject * object)
   g_free (udpsrc->uri);
   udpsrc->uri = NULL;
 
-  g_free (udpsrc->multi_group);
-  udpsrc->multi_group = NULL;
+  g_free (udpsrc->address);
+  udpsrc->address = NULL;
 
   if (udpsrc->socket)
     g_object_unref (udpsrc->socket);
@@ -587,17 +583,17 @@ skip_error:
 static gboolean
 gst_udpsrc_set_uri (GstUDPSrc * src, const gchar * uri, GError ** error)
 {
-  gchar *multi_group;
+  gchar *address;
   guint16 port;
 
-  if (!gst_udp_parse_uri (uri, &multi_group, &port))
+  if (!gst_udp_parse_uri (uri, &address, &port))
     goto wrong_uri;
 
   if (port == (guint16) - 1)
     port = UDP_DEFAULT_PORT;
 
-  g_free (src->multi_group);
-  src->multi_group = multi_group;
+  g_free (src->address);
+  src->address = address;
   src->port = port;
 
   g_free (src->uri);
@@ -630,22 +626,22 @@ gst_udpsrc_set_property (GObject * object, guint prop_id, const GValue * value,
       udpsrc->port = g_value_get_int (value);
       g_free (udpsrc->uri);
       udpsrc->uri =
-          g_strdup_printf ("udp://%s:%u", udpsrc->multi_group, udpsrc->port);
+          g_strdup_printf ("udp://%s:%u", udpsrc->address, udpsrc->port);
       break;
     case PROP_MULTICAST_GROUP:
-    case PROP_BIND_ADDRESS:
+    case PROP_ADDRESS:
     {
       const gchar *group;
 
-      g_free (udpsrc->multi_group);
+      g_free (udpsrc->address);
       if ((group = g_value_get_string (value)))
-        udpsrc->multi_group = g_strdup (group);
+        udpsrc->address = g_strdup (group);
       else
-        udpsrc->multi_group = g_strdup (UDP_DEFAULT_MULTICAST_GROUP);
+        udpsrc->address = g_strdup (UDP_DEFAULT_MULTICAST_GROUP);
 
       g_free (udpsrc->uri);
       udpsrc->uri =
-          g_strdup_printf ("udp://%s:%u", udpsrc->multi_group, udpsrc->port);
+          g_strdup_printf ("udp://%s:%u", udpsrc->address, udpsrc->port);
       break;
     }
     case PROP_MULTICAST_IFACE:
@@ -730,8 +726,8 @@ gst_udpsrc_get_property (GObject * object, guint prop_id, GValue * value,
       g_value_set_int (value, udpsrc->port);
       break;
     case PROP_MULTICAST_GROUP:
-    case PROP_BIND_ADDRESS:
-      g_value_set_string (value, udpsrc->multi_group);
+    case PROP_ADDRESS:
+      g_value_set_string (value, udpsrc->address);
       break;
     case PROP_MULTICAST_IFACE:
       g_value_set_string (value, udpsrc->multi_iface);
@@ -769,6 +765,48 @@ gst_udpsrc_get_property (GObject * object, guint prop_id, GValue * value,
   }
 }
 
+static GInetAddress *
+gst_udpsrc_resolve (GstUDPSrc * src, const gchar * address)
+{
+  GInetAddress *addr;
+  GError *err = NULL;
+  GResolver *resolver;
+
+  addr = g_inet_address_new_from_string (address);
+  if (!addr) {
+    GList *results;
+
+    GST_DEBUG_OBJECT (src, "resolving IP address for host %s", address);
+    resolver = g_resolver_get_default ();
+    results =
+        g_resolver_lookup_by_name (resolver, address, src->cancellable, &err);
+    if (!results)
+      goto name_resolve;
+    addr = G_INET_ADDRESS (g_object_ref (results->data));
+
+    g_resolver_free_addresses (results);
+    g_object_unref (resolver);
+  }
+#ifndef GST_DISABLE_GST_DEBUG
+  {
+    gchar *ip = g_inet_address_to_string (addr);
+
+    GST_DEBUG_OBJECT (src, "IP address for host %s is %s", address, ip);
+    g_free (ip);
+  }
+#endif
+
+  return addr;
+
+name_resolve:
+  {
+    GST_WARNING_OBJECT (src, "Failed to resolve %s: %s", address, err->message);
+    g_clear_error (&err);
+    g_object_unref (resolver);
+    return NULL;
+  }
+}
+
 /* create a socket for sending to remote machine */
 static gboolean
 gst_udpsrc_start (GstBaseSrc * bsrc)
@@ -776,42 +814,18 @@ gst_udpsrc_start (GstBaseSrc * bsrc)
   GstUDPSrc *src;
   GInetAddress *addr, *bind_addr;
   GSocketAddress *bind_saddr;
-  GResolver *resolver;
   GError *err = NULL;
 
   src = GST_UDPSRC (bsrc);
 
   if (src->socket == NULL) {
     /* need to allocate a socket */
-    GST_DEBUG_OBJECT (src, "allocating socket for %s:%d", src->multi_group,
+    GST_DEBUG_OBJECT (src, "allocating socket for %s:%d", src->address,
         src->port);
 
-    addr = g_inet_address_new_from_string (src->multi_group);
-    if (!addr) {
-      GList *results;
-
-      GST_DEBUG_OBJECT (src, "resolving IP address for host %s",
-          src->multi_group);
-      resolver = g_resolver_get_default ();
-      results =
-          g_resolver_lookup_by_name (resolver, src->multi_group,
-          src->cancellable, &err);
-      if (!results)
-        goto name_resolve;
-      addr = G_INET_ADDRESS (g_object_ref (results->data));
-
-      g_resolver_free_addresses (results);
-      g_object_unref (resolver);
-    }
-#ifndef GST_DISABLE_GST_DEBUG
-    {
-      gchar *ip = g_inet_address_to_string (addr);
-
-      GST_DEBUG_OBJECT (src, "IP address for host %s is %s", src->multi_group,
-          ip);
-      g_free (ip);
-    }
-#endif
+    addr = gst_udpsrc_resolve (src, src->address);
+    if (!addr)
+      goto name_resolve;
 
     if ((src->used_socket =
             g_socket_new (g_inet_address_get_family (addr),
@@ -829,9 +843,20 @@ gst_udpsrc_start (GstBaseSrc * bsrc)
 
     GST_DEBUG_OBJECT (src, "binding on port %d", src->port);
 
+    /* On Windows it's not possible to bind to a multicast address
+     * but the OS will make sure to filter out all packets that
+     * arrive not for the multicast address the socket joined.
+     *
+     * On Linux and others it is necessary to bind to a multicast
+     * address to let the OS filter out all packets that are received
+     * on the same port but for different addresses than the multicast
+     * address
+     */
+#ifdef G_OS_WIN32
     if (g_inet_address_get_is_multicast (addr))
       bind_addr = g_inet_address_new_any (g_inet_address_get_family (addr));
     else
+#endif
       bind_addr = G_INET_ADDRESS (g_object_ref (addr));
 
     g_object_unref (addr);
@@ -937,7 +962,7 @@ gst_udpsrc_start (GstBaseSrc * bsrc)
       &&
       g_inet_address_get_is_multicast (g_inet_socket_address_get_address
           (src->addr))) {
-    GST_DEBUG_OBJECT (src, "joining multicast group %s", src->multi_group);
+    GST_DEBUG_OBJECT (src, "joining multicast group %s", src->address);
     if (!g_socket_join_multicast_group (src->used_socket,
             g_inet_socket_address_get_address (src->addr),
             FALSE, src->multi_iface, &err))
@@ -971,10 +996,6 @@ gst_udpsrc_start (GstBaseSrc * bsrc)
   /* ERRORS */
 name_resolve:
   {
-    GST_ELEMENT_ERROR (src, RESOURCE, SETTINGS, (NULL),
-        ("Name resolval failed: %s", err->message));
-    g_clear_error (&err);
-    g_object_unref (resolver);
     return FALSE;
   }
 no_socket:
@@ -1054,7 +1075,7 @@ gst_udpsrc_stop (GstBaseSrc * bsrc)
             (src->addr))) {
       GError *err = NULL;
 
-      GST_DEBUG_OBJECT (src, "leaving multicast group %s", src->multi_group);
+      GST_DEBUG_OBJECT (src, "leaving multicast group %s", src->address);
 
       if (!g_socket_leave_multicast_group (src->used_socket,
               g_inet_socket_address_get_address (src->addr), FALSE,

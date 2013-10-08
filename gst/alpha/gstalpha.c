@@ -637,10 +637,10 @@ gst_alpha_set_argb_ayuv (const GstVideoFrame * in_frame,
   width = GST_VIDEO_FRAME_WIDTH (in_frame);
   height = GST_VIDEO_FRAME_HEIGHT (in_frame);
 
-  o[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 3);
-  o[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
-  o[2] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  o[3] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  o[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 3);
+  o[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
+  o[2] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  o[3] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
   memcpy (matrix,
       alpha->out_sdtv ? cog_rgb_to_ycbcr_matrix_8bit_sdtv :
@@ -692,10 +692,10 @@ gst_alpha_chroma_key_argb_ayuv (const GstVideoFrame * in_frame,
   width = GST_VIDEO_FRAME_WIDTH (in_frame);
   height = GST_VIDEO_FRAME_HEIGHT (in_frame);
 
-  o[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 3);
-  o[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
-  o[2] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  o[3] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  o[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 3);
+  o[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
+  o[2] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  o[3] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
   smin = 128 - alpha->black_sensitivity;
   smax = 128 + alpha->white_sensitivity;
@@ -750,15 +750,15 @@ gst_alpha_set_argb_argb (const GstVideoFrame * in_frame,
   width = GST_VIDEO_FRAME_WIDTH (in_frame);
   height = GST_VIDEO_FRAME_HEIGHT (in_frame);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 3);
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 0);
-  p[2] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 2);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 3);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 0);
+  p[2] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 2);
 
-  o[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 3);
-  o[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
-  o[2] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  o[3] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  o[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 3);
+  o[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
+  o[2] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  o[3] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
   for (i = 0; i < height; i++) {
     for (j = 0; j < width; j++) {
@@ -802,15 +802,15 @@ gst_alpha_chroma_key_argb_argb (const GstVideoFrame * in_frame,
   width = GST_VIDEO_FRAME_WIDTH (in_frame);
   height = GST_VIDEO_FRAME_HEIGHT (in_frame);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 3);
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 0);
-  p[2] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 2);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 3);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 0);
+  p[2] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 2);
 
-  o[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 3);
-  o[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
-  o[2] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  o[3] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  o[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 3);
+  o[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
+  o[2] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  o[3] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
   smin = 128 - alpha->black_sensitivity;
   smax = 128 + alpha->white_sensitivity;
@@ -870,10 +870,10 @@ gst_alpha_set_ayuv_argb (const GstVideoFrame * in_frame,
   width = GST_VIDEO_FRAME_WIDTH (in_frame);
   height = GST_VIDEO_FRAME_HEIGHT (in_frame);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 3);
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 0);
-  p[2] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 2);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 3);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 0);
+  p[2] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 2);
 
   memcpy (matrix,
       alpha->in_sdtv ? cog_ycbcr_to_rgb_matrix_8bit_sdtv :
@@ -925,10 +925,10 @@ gst_alpha_chroma_key_ayuv_argb (const GstVideoFrame * in_frame,
   width = GST_VIDEO_FRAME_WIDTH (in_frame);
   height = GST_VIDEO_FRAME_HEIGHT (in_frame);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 3);
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 0);
-  p[2] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 2);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 3);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 0);
+  p[2] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 2);
 
   smin = 128 - alpha->black_sensitivity;
   smax = 128 + alpha->white_sensitivity;
@@ -1121,9 +1121,9 @@ gst_alpha_set_rgb_ayuv (const GstVideoFrame * in_frame,
   height = GST_VIDEO_FRAME_HEIGHT (in_frame);
 
   bpp = GST_VIDEO_FRAME_COMP_PSTRIDE (in_frame, 0);
-  o[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
-  o[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  o[2] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  o[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
+  o[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  o[2] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
   memcpy (matrix,
       alpha->out_sdtv ? cog_rgb_to_ycbcr_matrix_8bit_sdtv :
@@ -1178,9 +1178,9 @@ gst_alpha_chroma_key_rgb_ayuv (const GstVideoFrame * in_frame,
 
   bpp = GST_VIDEO_FRAME_COMP_PSTRIDE (in_frame, 0);
 
-  o[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
-  o[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  o[2] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  o[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
+  o[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  o[2] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
   smin = 128 - alpha->black_sensitivity;
   smax = 128 + alpha->white_sensitivity;
@@ -1238,14 +1238,14 @@ gst_alpha_set_rgb_argb (const GstVideoFrame * in_frame,
 
   bpp = GST_VIDEO_FRAME_COMP_PSTRIDE (in_frame, 0);
 
-  o[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
-  o[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  o[2] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  o[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
+  o[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  o[2] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 3);
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 0);
-  p[2] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 2);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 3);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 0);
+  p[2] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 2);
 
   for (i = 0; i < height; i++) {
     for (j = 0; j < width; j++) {
@@ -1292,14 +1292,14 @@ gst_alpha_chroma_key_rgb_argb (const GstVideoFrame * in_frame,
 
   bpp = GST_VIDEO_FRAME_COMP_PSTRIDE (in_frame, 0);
 
-  o[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
-  o[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  o[2] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  o[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
+  o[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  o[2] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 3);
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 0);
-  p[2] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 2);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 3);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 0);
+  p[2] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 2);
 
   smin = 128 - alpha->black_sensitivity;
   smax = 128 + alpha->white_sensitivity;
@@ -1344,7 +1344,6 @@ static void
 gst_alpha_set_planar_yuv_ayuv (const GstVideoFrame * in_frame,
     GstVideoFrame * out_frame, GstAlpha * alpha)
 {
-  const guint8 *src;
   guint8 *dest;
   gint width, height;
   gint b_alpha = CLAMP ((gint) (alpha->alpha * 255), 0, 255);
@@ -1355,7 +1354,6 @@ gst_alpha_set_planar_yuv_ayuv (const GstVideoFrame * in_frame,
   gint y_stride, uv_stride;
   gint v_subs, h_subs;
 
-  src = GST_VIDEO_FRAME_PLANE_DATA (in_frame, 0);
   dest = GST_VIDEO_FRAME_PLANE_DATA (out_frame, 0);
 
   width = GST_VIDEO_FRAME_WIDTH (in_frame);
@@ -1364,9 +1362,9 @@ gst_alpha_set_planar_yuv_ayuv (const GstVideoFrame * in_frame,
   y_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 0);
   uv_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 1);
 
-  srcY_tmp = srcY = src;
-  srcU_tmp = srcU = src + GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  srcV_tmp = srcV = src + GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  srcY_tmp = srcY = GST_VIDEO_FRAME_COMP_DATA (in_frame, 0);
+  srcU_tmp = srcU = GST_VIDEO_FRAME_COMP_DATA (in_frame, 1);
+  srcV_tmp = srcV = GST_VIDEO_FRAME_COMP_DATA (in_frame, 2);
 
   switch (GST_VIDEO_FRAME_FORMAT (in_frame)) {
     case GST_VIDEO_FORMAT_I420:
@@ -1458,7 +1456,6 @@ static void
 gst_alpha_chroma_key_planar_yuv_ayuv (const GstVideoFrame * in_frame,
     GstVideoFrame * out_frame, GstAlpha * alpha)
 {
-  const guint8 *src;
   guint8 *dest;
   gint width, height;
   gint b_alpha = CLAMP ((gint) (alpha->alpha * 255), 0, 255);
@@ -1479,7 +1476,6 @@ gst_alpha_chroma_key_planar_yuv_ayuv (const GstVideoFrame * in_frame,
   guint8 kfgy_scale = alpha->kfgy_scale;
   guint noise_level2 = alpha->noise_level2;
 
-  src = GST_VIDEO_FRAME_PLANE_DATA (in_frame, 0);
   dest = GST_VIDEO_FRAME_PLANE_DATA (out_frame, 0);
 
   width = GST_VIDEO_FRAME_WIDTH (in_frame);
@@ -1488,9 +1484,9 @@ gst_alpha_chroma_key_planar_yuv_ayuv (const GstVideoFrame * in_frame,
   y_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 0);
   uv_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 1);
 
-  srcY_tmp = srcY = src;
-  srcU_tmp = srcU = src + GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  srcV_tmp = srcV = src + GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  srcY_tmp = srcY = GST_VIDEO_FRAME_COMP_DATA (in_frame, 0);
+  srcU_tmp = srcU = GST_VIDEO_FRAME_COMP_DATA (in_frame, 1);
+  srcV_tmp = srcV = GST_VIDEO_FRAME_COMP_DATA (in_frame, 2);
 
   switch (GST_VIDEO_FRAME_FORMAT (in_frame)) {
     case GST_VIDEO_FORMAT_I420:
@@ -1597,7 +1593,6 @@ static void
 gst_alpha_set_planar_yuv_argb (const GstVideoFrame * in_frame,
     GstVideoFrame * out_frame, GstAlpha * alpha)
 {
-  const guint8 *src;
   guint8 *dest;
   gint width, height;
   gint b_alpha = CLAMP ((gint) (alpha->alpha * 255), 0, 255);
@@ -1612,23 +1607,22 @@ gst_alpha_set_planar_yuv_argb (const GstVideoFrame * in_frame,
   gint r, g, b;
   gint p[4];
 
-  src = GST_VIDEO_FRAME_PLANE_DATA (in_frame, 0);
   dest = GST_VIDEO_FRAME_PLANE_DATA (out_frame, 0);
 
   width = GST_VIDEO_FRAME_WIDTH (in_frame);
   height = GST_VIDEO_FRAME_HEIGHT (in_frame);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 3);
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 0);
-  p[2] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 2);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 3);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 0);
+  p[2] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 2);
 
   y_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 0);
   uv_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 1);
 
-  srcY_tmp = srcY = src;
-  srcU_tmp = srcU = src + GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  srcV_tmp = srcV = src + GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  srcY_tmp = srcY = GST_VIDEO_FRAME_COMP_DATA (in_frame, 0);
+  srcU_tmp = srcU = GST_VIDEO_FRAME_COMP_DATA (in_frame, 1);
+  srcV_tmp = srcV = GST_VIDEO_FRAME_COMP_DATA (in_frame, 2);
 
   switch (GST_VIDEO_FRAME_FORMAT (in_frame)) {
     case GST_VIDEO_FORMAT_I420:
@@ -1693,7 +1687,6 @@ static void
 gst_alpha_chroma_key_planar_yuv_argb (const GstVideoFrame * in_frame,
     GstVideoFrame * out_frame, GstAlpha * alpha)
 {
-  const guint8 *src;
   guint8 *dest;
   gint width, height;
   gint b_alpha = CLAMP ((gint) (alpha->alpha * 255), 0, 255);
@@ -1717,23 +1710,22 @@ gst_alpha_chroma_key_planar_yuv_argb (const GstVideoFrame * in_frame,
   gint matrix[12];
   gint p[4];
 
-  src = GST_VIDEO_FRAME_PLANE_DATA (in_frame, 0);
   dest = GST_VIDEO_FRAME_PLANE_DATA (out_frame, 0);
 
   width = GST_VIDEO_FRAME_WIDTH (in_frame);
   height = GST_VIDEO_FRAME_HEIGHT (in_frame);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 3);
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 0);
-  p[2] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 2);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 3);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 0);
+  p[2] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 2);
 
   y_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 0);
   uv_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 1);
 
-  srcY_tmp = srcY = src;
-  srcU_tmp = srcU = src + GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  srcV_tmp = srcV = src + GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  srcY_tmp = srcY = GST_VIDEO_FRAME_COMP_DATA (in_frame, 0);
+  srcU_tmp = srcU = GST_VIDEO_FRAME_COMP_DATA (in_frame, 1);
+  srcV_tmp = srcV = GST_VIDEO_FRAME_COMP_DATA (in_frame, 2);
 
   switch (GST_VIDEO_FRAME_FORMAT (in_frame)) {
     case GST_VIDEO_FORMAT_I420:
@@ -1823,10 +1815,10 @@ gst_alpha_set_packed_422_ayuv (const GstVideoFrame * in_frame,
 
   src_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 0);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
   p[2] = p[0] + 2;
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
   if (alpha->in_sdtv != alpha->out_sdtv) {
     gint matrix[12];
@@ -1953,10 +1945,10 @@ gst_alpha_chroma_key_packed_422_ayuv (const GstVideoFrame * in_frame,
 
   src_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 0);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
   p[2] = p[0] + 2;
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
   smin = 128 - alpha->black_sensitivity;
   smax = 128 + alpha->white_sensitivity;
@@ -2101,15 +2093,15 @@ gst_alpha_set_packed_422_argb (const GstVideoFrame * in_frame,
 
   src_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 0);
 
-  o[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
+  o[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
   o[2] = o[0] + 2;
-  o[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  o[3] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  o[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  o[3] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 3);
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 0);
-  p[2] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 2);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 3);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 0);
+  p[2] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 2);
 
   memcpy (matrix,
       alpha->in_sdtv ? cog_ycbcr_to_rgb_matrix_8bit_sdtv :
@@ -2190,15 +2182,15 @@ gst_alpha_chroma_key_packed_422_argb (const GstVideoFrame * in_frame,
 
   src_stride = GST_VIDEO_FRAME_COMP_STRIDE (in_frame, 0);
 
-  o[0] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 0);
+  o[0] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 0);
   o[2] = o[0] + 2;
-  o[1] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 1);
-  o[3] = GST_VIDEO_FRAME_COMP_OFFSET (in_frame, 2);
+  o[1] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 1);
+  o[3] = GST_VIDEO_FRAME_COMP_POFFSET (in_frame, 2);
 
-  p[0] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 3);
-  p[1] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 0);
-  p[2] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 1);
-  p[3] = GST_VIDEO_FRAME_COMP_OFFSET (out_frame, 2);
+  p[0] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 3);
+  p[1] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 0);
+  p[2] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 1);
+  p[3] = GST_VIDEO_FRAME_COMP_POFFSET (out_frame, 2);
 
   memcpy (matrix,
       alpha->in_sdtv ? cog_ycbcr_to_rgb_matrix_8bit_sdtv :
