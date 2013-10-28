@@ -1424,28 +1424,29 @@ gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src)
 {
   const gchar *header_name, *header_value;
   SoupMessageHeadersIter iter;
+  GString *log_str = g_string_sized_new (256);
 
   if (src->msg) {
-    GST_INFO_OBJECT (src, "REQUEST: %s %s HTTP/1.%d", src->msg->method,
-        soup_uri_to_string (soup_message_get_uri (src->msg), TRUE),
-        soup_message_get_http_version (src->msg));
+    g_string_append_printf (log_str, "\nREQUEST: %s %s HTTP/1.%d\n",
+        src->msg->method, soup_uri_to_string (soup_message_get_uri (src->msg),
+            TRUE), soup_message_get_http_version (src->msg));
 
-    GST_INFO_OBJECT (src, "REQUEST HEADERS:");
+    log_str = g_string_append (log_str, "REQUEST HEADERS:\n");
     soup_message_headers_iter_init (&iter, src->msg->request_headers);
     while (soup_message_headers_iter_next (&iter, &header_name, &header_value))
-      GST_INFO_OBJECT (src, "%s: %s", header_name, header_value);
+      g_string_append_printf (log_str, "%s: %s\n", header_name, header_value);
 
-    GST_INFO_OBJECT (src, "RESPONSE: HTTP/1.%d %d %s",
+    g_string_append_printf (log_str, "RESPONSE: HTTP/1.%d %d %s\n",
         soup_message_get_http_version (src->msg),
         src->msg->status_code, src->msg->reason_phrase);
 
-    GST_INFO_OBJECT (src, "RESPONSE HEADERS:");
+    log_str = g_string_append (log_str, "RESPONSE HEADERS:\n");
     soup_message_headers_iter_init (&iter, src->msg->response_headers);
     while (soup_message_headers_iter_next (&iter, &header_name, &header_value))
-      GST_INFO_OBJECT (src, "%s: %s", header_name, header_value);
-  } else {
+      g_string_append_printf (log_str, "%s: %s\n", header_name, header_value);
+    GST_INFO_OBJECT (src, "Soup http message: %s", log_str->str);
+  } else
     GST_INFO_OBJECT (src, "Null soup http message");
-  }
 }
 
 static void
