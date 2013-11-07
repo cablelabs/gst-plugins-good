@@ -404,6 +404,7 @@ gst_matroska_demux_add_stream (GstMatroskaDemux * demux, GstEbmlRead * ebml)
   guint16 riff_audio_fmt = 0;
   GstEvent *stream_start;
   gchar *codec = NULL;
+  gchar *uid;
   gchar *stream_id;
 
   DEBUG_ELEMENT_START (demux, ebml, "TrackEntry");
@@ -1202,6 +1203,11 @@ gst_matroska_demux_add_stream (GstMatroskaDemux * demux, GstEbmlRead * ebml)
     GST_LOG ("stream %d: language=eng (assuming default)", context->index);
     context->language = g_strdup ("eng");
   }
+
+  uid = g_strdup_printf ("%" G_GUINT64_FORMAT, context->uid);
+  gst_tag_list_add (context->tags, GST_TAG_MERGE_REPLACE, GST_TAG_TRACK_ID, uid,
+      NULL);
+  g_free (uid);
 
   if (context->language) {
     const gchar *lang;
