@@ -569,6 +569,7 @@ gst_matroska_demux_add_stream (GstMatroskaDemux * demux, GstEbmlRead * ebml)
   GstTagList *list = NULL;
   GstEvent *stream_start;
   gchar *codec = NULL;
+  gchar *uid;
   gchar *stream_id;
 
   DEBUG_ELEMENT_START (demux, ebml, "TrackEntry");
@@ -1308,11 +1309,15 @@ gst_matroska_demux_add_stream (GstMatroskaDemux * demux, GstEbmlRead * ebml)
     context->language = g_strdup ("eng");
   }
 
+  if (!list)
+    list = gst_tag_list_new_empty ();
+
+  uid = g_strdup_printf ("%" G_GUINT64_FORMAT, context->uid);
+  gst_tag_list_add (list, GST_TAG_MERGE_REPLACE, GST_TAG_TRACK_ID, uid, NULL);
+  g_free (uid);
+
   if (context->language) {
     const gchar *lang;
-
-    if (!list)
-      list = gst_tag_list_new_empty ();
 
     /* Matroska contains ISO 639-2B codes, we want ISO 639-1 */
     lang = gst_tag_get_language_code (context->language);
