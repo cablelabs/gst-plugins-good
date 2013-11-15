@@ -138,7 +138,8 @@ enum _GstRtspSrcBufferMode
   BUFFER_MODE_NONE,
   BUFFER_MODE_SLAVE,
   BUFFER_MODE_BUFFER,
-  BUFFER_MODE_AUTO
+  BUFFER_MODE_AUTO,
+  BUFFER_MODE_SYNCED
 };
 
 #define GST_TYPE_RTSP_SRC_BUFFER_MODE (gst_rtsp_src_buffer_mode_get_type())
@@ -151,6 +152,7 @@ gst_rtsp_src_buffer_mode_get_type (void)
     {BUFFER_MODE_SLAVE, "Slave receiver to sender clock", "slave"},
     {BUFFER_MODE_BUFFER, "Do low/high watermark buffering", "buffer"},
     {BUFFER_MODE_AUTO, "Choose mode depending on stream live", "auto"},
+    {BUFFER_MODE_SYNCED, "Synchronized sender and receiver clocks", "synced"},
     {0, NULL, NULL},
   };
 
@@ -186,6 +188,7 @@ gst_rtsp_src_buffer_mode_get_type (void)
 #define DEFAULT_MULTICAST_IFACE  NULL
 #define DEFAULT_NTP_SYNC         FALSE
 #define DEFAULT_USE_PIPELINE_CLOCK      FALSE
+#define DEFAULT_TLS_VALIDATION_FLAGS G_TLS_CERTIFICATE_VALIDATE_ALL
 
 enum
 {
@@ -218,6 +221,7 @@ enum
   PROP_NTP_SYNC,
   PROP_USE_PIPELINE_CLOCK,
   PROP_SDES,
+  PROP_TLS_VALIDATION_FLAGS,
   PROP_LAST
 };
 
@@ -583,6 +587,20 @@ gst_rtspsrc_class_init (GstRTSPSrcClass * klass)
           GST_TYPE_STRUCTURE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
+   * GstRTSPSrc::tls-validation-flags:
+   *
+   * TLS certificate validation flags used to validate server
+   * certificate.
+   *
+   * Since: 1.2.1
+   */
+  g_object_class_install_property (gobject_class, PROP_TLS_VALIDATION_FLAGS,
+      g_param_spec_flags ("tls-validation-flags", "TLS validation flags",
+          "TLS certificate validation flags used to validate the server certificate",
+          G_TYPE_TLS_CERTIFICATE_FLAGS, DEFAULT_TLS_VALIDATION_FLAGS,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /**
    * GstRTSPSrc::handle-request:
    * @rtspsrc: a #GstRTSPSrc
    * @request: a #GstRTSPMessage
@@ -694,6 +712,7 @@ gst_rtspsrc_init (GstRTSPSrc * src)
   src->ntp_sync = DEFAULT_NTP_SYNC;
   src->use_pipeline_clock = DEFAULT_USE_PIPELINE_CLOCK;
   src->sdes = NULL;
+  src->tls_validation_flags = DEFAULT_TLS_VALIDATION_FLAGS;
 
   /* get a list of all extensions */
   src->extensions = gst_rtsp_ext_list_get ();
@@ -948,6 +967,9 @@ gst_rtspsrc_set_property (GObject * object, guint prop_id, const GValue * value,
     case PROP_SDES:
       rtspsrc->sdes = g_value_dup_boxed (value);
       break;
+    case PROP_TLS_VALIDATION_FLAGS:
+      rtspsrc->tls_validation_flags = g_value_get_flags (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1072,6 +1094,9 @@ gst_rtspsrc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_SDES:
       g_value_set_boxed (value, rtspsrc->sdes);
+      break;
+    case PROP_TLS_VALIDATION_FLAGS:
+      g_value_set_flags (value, rtspsrc->tls_validation_flags);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -2629,6 +2654,55 @@ on_ssrc_active (GObject * session, GObject * source, GstRTSPStream * stream)
       stream->id);
 }
 
+static void
+set_manager_buffer_mode (GstRTSPSrc * src)
+{
+  GObjectClass *klass;
+
+  g_return_if_fail (G_IS_OBJECT (src->manager));
+
+  klass = G_OBJECT_GET_CLASS (G_OBJECT (src->manager));
+
+  if (!g_object_class_find_property (klass, "buffer-mode"))
+    return;
+
+  if (src->buffer_mode != BUFFER_MODE_AUTO) {
+    g_object_set (src->manager, "buffer-mode", src->buffer_mode, NULL);
+
+    return;
+  }
+
+  GST_DEBUG_OBJECT (src,
+      "auto buffering mode, have clock %" GST_PTR_FORMAT, src->provided_clock);
+
+  if (src->provided_clock) {
+    GstClock *clock = gst_element_get_clock (GST_ELEMENT_CAST (src));
+
+    if (clock == src->provided_clock) {
+      GST_DEBUG_OBJECT (src, "selected synced");
+      g_object_set (src->manager, "buffer-mode", BUFFER_MODE_SYNCED, NULL);
+
+      if (clock)
+        gst_object_unref (clock);
+
+      return;
+    }
+
+    /* Otherwise fall-through and use another buffer mode */
+    if (clock)
+      gst_object_unref (clock);
+  }
+
+  GST_DEBUG_OBJECT (src, "auto buffering mode");
+  if (src->use_buffering) {
+    GST_DEBUG_OBJECT (src, "selected buffer");
+    g_object_set (src->manager, "buffer-mode", BUFFER_MODE_BUFFER, NULL);
+  } else {
+    GST_DEBUG_OBJECT (src, "selected slave");
+    g_object_set (src->manager, "buffer-mode", BUFFER_MODE_SLAVE, NULL);
+  }
+}
+
 /* try to get and configure a manager */
 static gboolean
 gst_rtspsrc_stream_configure_manager (GstRTSPSrc * src, GstRTSPStream * stream,
@@ -2648,6 +2722,9 @@ gst_rtspsrc_stream_configure_manager (GstRTSPSrc * src, GstRTSPStream * stream,
     /* configure the manager */
     if (src->manager == NULL) {
       GObjectClass *klass;
+      GstStructure *s;
+      const gchar *encoding;
+      gboolean need_slave;
 
       if (!(src->manager = gst_element_factory_make (manager, "manager"))) {
         /* fallback */
@@ -2691,39 +2768,26 @@ gst_rtspsrc_stream_configure_manager (GstRTSPSrc * src, GstRTSPStream * stream,
             NULL);
       }
 
-      if (g_object_class_find_property (klass, "buffer-mode")) {
-        if (src->buffer_mode != BUFFER_MODE_AUTO) {
-          g_object_set (src->manager, "buffer-mode", src->buffer_mode, NULL);
-        } else {
-          gboolean need_slave;
-          GstStructure *s;
-          const gchar *encoding;
-
-          /* buffer mode pauses are handled by adding offsets to buffer times,
-           * but some depayloaders may have a hard time syncing output times
-           * with such input times, e.g. container ones, most notably ASF */
-          /* TODO alternatives are having an event that indicates these shifts,
-           * or having rtsp extensions provide suggestion on buffer mode */
-          need_slave = stream->container;
-          if (stream->caps && (s = gst_caps_get_structure (stream->caps, 0)) &&
-              (encoding = gst_structure_get_string (s, "encoding-name")))
-            need_slave = need_slave || (strcmp (encoding, "X-ASF-PF") == 0);
-          GST_DEBUG_OBJECT (src, "auto buffering mode, need_slave %d",
-              need_slave);
-          /* valid duration implies not likely live pipeline,
-           * so slaving in jitterbuffer does not make much sense
-           * (and might mess things up due to bursts) */
-          if (GST_CLOCK_TIME_IS_VALID (src->segment.duration) &&
-              src->segment.duration && !need_slave) {
-            GST_DEBUG_OBJECT (src, "selected buffer");
-            g_object_set (src->manager, "buffer-mode", BUFFER_MODE_BUFFER,
-                NULL);
-          } else {
-            GST_DEBUG_OBJECT (src, "selected slave");
-            g_object_set (src->manager, "buffer-mode", BUFFER_MODE_SLAVE, NULL);
-          }
-        }
+      /* buffer mode pauses are handled by adding offsets to buffer times,
+       * but some depayloaders may have a hard time syncing output times
+       * with such input times, e.g. container ones, most notably ASF */
+      /* TODO alternatives are having an event that indicates these shifts,
+       * or having rtsp extensions provide suggestion on buffer mode */
+      need_slave = stream->container;
+      if (stream->caps && (s = gst_caps_get_structure (stream->caps, 0)) &&
+          (encoding = gst_structure_get_string (s, "encoding-name")))
+        need_slave = need_slave || (strcmp (encoding, "X-ASF-PF") == 0);
+      /* valid duration implies not likely live pipeline,
+       * so slaving in jitterbuffer does not make much sense
+       * (and might mess things up due to bursts) */
+      if (GST_CLOCK_TIME_IS_VALID (src->segment.duration) &&
+          src->segment.duration && !need_slave) {
+        src->use_buffering = TRUE;
+      } else {
+        src->use_buffering = FALSE;
       }
+
+      set_manager_buffer_mode (src);
 
       /* connect to signals if we did not already do so */
       GST_DEBUG_OBJECT (src, "connect to signals on session manager, stream %p",
@@ -3631,6 +3695,12 @@ gst_rtsp_conninfo_connect (GstRTSPSrc * src, GstRTSPConnInfo * info,
     info->url_str = gst_rtsp_url_get_request_uri (info->url);
 
     GST_DEBUG_OBJECT (src, "sanitized uri %s", info->url_str);
+
+    if (info->url->transports & GST_RTSP_LOWER_TRANS_TLS) {
+      if (!gst_rtsp_connection_set_tls_validation_flags (info->connection,
+              src->tls_validation_flags))
+        GST_WARNING_OBJECT (src, "Unable to set TLS validation flags");
+    }
 
     if (info->url->transports & GST_RTSP_LOWER_TRANS_HTTP)
       gst_rtsp_connection_set_tunneled (info->connection, TRUE);
@@ -7104,6 +7174,8 @@ gst_rtspsrc_change_state (GstElement * element, GstStateChange transition)
       gst_rtspsrc_loop_send_cmd (rtspsrc, CMD_OPEN, 0);
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
+      set_manager_buffer_mode (rtspsrc);
+      /* fall-through */
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
       /* unblock the tcp tasks and make the loop waiting */
       if (gst_rtspsrc_loop_send_cmd (rtspsrc, CMD_WAIT, CMD_LOOP)) {

@@ -638,6 +638,12 @@ flushing:
     g_mutex_unlock (&sink->client_lock);
     g_clear_error (&err);
 
+    /* unmap all memory */
+    for (i = 0; i < n_mem; i++) {
+      gst_memory_unmap (map[i].memory, &map[i]);
+      gst_memory_unref (map[i].memory);
+    }
+
     return GST_FLOW_FLUSHING;
   }
 }
@@ -1046,7 +1052,7 @@ gst_multiudpsink_start (GstBaseSink * bsink)
         goto no_socket;
 
       bind_iaddr = g_inet_address_new_any (G_SOCKET_FAMILY_IPV4);
-      bind_addr = g_inet_socket_address_new (bind_iaddr, 0);
+      bind_addr = g_inet_socket_address_new (bind_iaddr, sink->bind_port);
       g_socket_bind (sink->used_socket, bind_addr, TRUE, &err);
       g_object_unref (bind_addr);
       g_object_unref (bind_iaddr);
@@ -1061,7 +1067,7 @@ gst_multiudpsink_start (GstBaseSink * bsink)
         g_clear_error (&err);
       } else {
         bind_iaddr = g_inet_address_new_any (G_SOCKET_FAMILY_IPV6);
-        bind_addr = g_inet_socket_address_new (bind_iaddr, 0);
+        bind_addr = g_inet_socket_address_new (bind_iaddr, sink->bind_port);
         g_socket_bind (sink->used_socket_v6, bind_addr, TRUE, &err);
         g_object_unref (bind_addr);
         g_object_unref (bind_iaddr);

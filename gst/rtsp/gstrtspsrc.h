@@ -52,6 +52,7 @@ G_BEGIN_DECLS
 #include <gst/rtsp/gstrtspmessage.h>
 #include <gst/rtsp/gstrtspurl.h>
 #include <gst/rtsp/gstrtsprange.h>
+#include <gio/gio.h>
 
 #include "gstrtspext.h"
 
@@ -226,6 +227,7 @@ struct _GstRTSPSrc {
   gboolean          ntp_sync;
   gboolean          use_pipeline_clock;
   GstStructure     *sdes;
+  GTlsCertificateFlags tls_validation_flags;
 
   /* state */
   GstRTSPState       state;
@@ -249,6 +251,7 @@ struct _GstRTSPSrc {
   GstElement      *manager;
   gulong           manager_sig_id;
   gulong           manager_ptmap_id;
+  gboolean         use_buffering;
 
   GstRTSPConnInfo  conninfo;
 

@@ -1381,7 +1381,7 @@ gst_matroska_demux_add_stream (GstMatroskaDemux * demux, GstEbmlRead * ebml)
 
   stream_id =
       gst_pad_create_stream_id_printf (context->pad, GST_ELEMENT_CAST (demux),
-      "%03u", context->uid);
+      "%03" G_GUINT64_FORMAT, context->uid);
   stream_start =
       gst_pad_get_sticky_event (demux->common.sinkpad, GST_EVENT_STREAM_START,
       0);
@@ -1877,12 +1877,17 @@ retry:
       GST_TIME_FORMAT, opos, GST_TIME_ARGS (otime),
       GST_TIME_ARGS (otime - demux->stream_start_time),
       GST_TIME_ARGS (demux->stream_start_time), GST_TIME_ARGS (time));
-  newpos =
-      gst_util_uint64_scale (opos - demux->common.ebml_segment_start,
-      time - demux->stream_start_time,
-      otime - demux->stream_start_time) - chunk;
-  if (newpos < 0)
+
+  if (otime <= demux->stream_start_time) {
     newpos = 0;
+  } else {
+    newpos =
+        gst_util_uint64_scale (opos - demux->common.ebml_segment_start,
+        time - demux->stream_start_time,
+        otime - demux->stream_start_time) - chunk;
+    if (newpos < 0)
+      newpos = 0;
+  }
   /* favour undershoot */
   newpos = newpos * 90 / 100;
   newpos += demux->common.ebml_segment_start;
@@ -2755,7 +2760,7 @@ gst_matroska_demux_push_dvd_clut_change_event (GstMatroskaDemux * demux,
           G_TYPE_INT, clut[15], NULL);
 
       gst_pad_push_event (stream->pad,
-          gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM, s));
+          gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM_STICKY, s));
     }
   }
   g_free (buf);
@@ -3473,7 +3478,7 @@ gst_matroska_demux_parse_blockgroup_or_simpleblock (GstMatroskaDemux * demux,
       segment_event = gst_event_new_segment (segment);
       if (demux->segment_seqnum)
         gst_event_set_seqnum (segment_event, demux->segment_seqnum);
-      gst_matroska_demux_send_event (demux, gst_event_new_segment (segment));
+      gst_matroska_demux_send_event (demux, segment_event);
       demux->need_segment = FALSE;
       demux->segment_seqnum = 0;
     }
