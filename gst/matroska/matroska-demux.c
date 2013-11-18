@@ -1313,7 +1313,8 @@ gst_matroska_demux_add_stream (GstMatroskaDemux * demux, GstEbmlRead * ebml)
     list = gst_tag_list_new_empty ();
 
   uid = g_strdup_printf ("%" G_GUINT64_FORMAT, context->uid);
-  gst_tag_list_add (list, GST_TAG_MERGE_REPLACE, GST_TAG_TRACK_ID, uid, NULL);
+  gst_tag_list_add (list, GST_TAG_MERGE_REPLACE, GST_TAG_TRACK_CONTAINER_ID,
+      uid, NULL);
   g_free (uid);
 
   if (context->language) {
