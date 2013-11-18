@@ -2523,7 +2523,7 @@ gst_matroska_mux_start (GstMatroskaMux * mux)
 
   /* output caps */
   audio_only = mux->num_v_streams == 0 && mux->num_a_streams > 0;
-  if (!strcmp (mux->doctype, GST_MATROSKA_DOCTYPE_WEBM)) {
+  if (mux->is_webm) {
     media_type = (audio_only) ? "audio/webm" : "video/webm";
   } else {
     media_type = (audio_only) ? "audio/x-matroska" : "video/x-matroska";
@@ -2581,11 +2581,16 @@ gst_matroska_mux_start (GstMatroskaMux * mux)
   /* segment info */
   mux->info_pos = ebml->pos;
   master = gst_ebml_write_master_start (ebml, GST_MATROSKA_ID_SEGMENTINFO);
-  for (i = 0; i < 4; i++) {
-    segment_uid[i] = g_random_int ();
+
+  /* WebM does not support SegmentUID field on SegmentInfo */
+  if (!mux->is_webm) {
+    for (i = 0; i < 4; i++) {
+      segment_uid[i] = g_random_int ();
+    }
+    gst_ebml_write_binary (ebml, GST_MATROSKA_ID_SEGMENTUID,
+        (guint8 *) segment_uid, 16);
   }
-  gst_ebml_write_binary (ebml, GST_MATROSKA_ID_SEGMENTUID,
-      (guint8 *) segment_uid, 16);
+
   gst_ebml_write_uint (ebml, GST_MATROSKA_ID_TIMECODESCALE, mux->time_scale);
   mux->duration_pos = ebml->pos;
   /* get duration */
@@ -3462,7 +3467,7 @@ gst_matroska_mux_handle_buffer (GstCollectPads * pads, GstCollectData * data,
 
   /* if there is no best pad, we have reached EOS */
   if (best == NULL) {
-    GST_DEBUG_OBJECT (mux, "No best pad finishing...");
+    GST_DEBUG_OBJECT (mux, "No best pad. Finishing...");
     if (!mux->streamable) {
       gst_matroska_mux_finish (mux);
     } else {
