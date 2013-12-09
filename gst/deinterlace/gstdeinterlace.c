@@ -501,12 +501,11 @@ gst_deinterlace_class_init (GstDeinterlaceClass * klass)
   gobject_class->finalize = gst_deinterlace_finalize;
 
   /**
-   * GstDeinterlace:mode
+   * GstDeinterlace:mode:
    *
    * This selects whether the deinterlacing methods should
    * always be applied or if they should only be applied
    * on content that has the "interlaced" flag on the caps.
-   *
    */
   g_object_class_install_property (gobject_class, PROP_MODE,
       g_param_spec_enum ("mode",
@@ -517,7 +516,7 @@ gst_deinterlace_class_init (GstDeinterlaceClass * klass)
       );
 
   /**
-   * GstDeinterlace:method
+   * GstDeinterlace:method:
    *
    * Selects the different deinterlacing algorithms that can be used.
    * These provide different quality and CPU usage.
@@ -599,11 +598,10 @@ gst_deinterlace_class_init (GstDeinterlaceClass * klass)
       );
 
   /**
-   * GstDeinterlace:fields
+   * GstDeinterlace:fields:
    *
    * This selects which fields should be output. If "all" is selected
    * the output framerate will be double.
-   *
    */
   g_object_class_install_property (gobject_class, PROP_FIELDS,
       g_param_spec_enum ("fields",
@@ -614,7 +612,7 @@ gst_deinterlace_class_init (GstDeinterlaceClass * klass)
       );
 
   /**
-   * GstDeinterlace:layout
+   * GstDeinterlace:layout:
    *
    * This selects which fields is the first in time.
    *
@@ -628,14 +626,11 @@ gst_deinterlace_class_init (GstDeinterlaceClass * klass)
       );
 
   /**
-   * GstDeinterlace:locking
+   * GstDeinterlace:locking:
    *
    * This selects which approach to pattern locking is used which affects
    * processing latency and accuracy of timestamp adjustment for telecine
    * streams.
-   *
-   * Since: 0.10.31
-   *
    */
   g_object_class_install_property (gobject_class, PROP_LOCKING,
       g_param_spec_enum ("locking", "locking", "Pattern locking mode",
@@ -643,13 +638,10 @@ gst_deinterlace_class_init (GstDeinterlaceClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * GstDeinterlace:ignore-obscure
+   * GstDeinterlace:ignore-obscure:
    *
    * This selects whether to ignore obscure/rare telecine patterns.
    * NTSC 2:3 pulldown variants are the only really common patterns.
-   *
-   * Since: 0.10.31
-   *
    */
   g_object_class_install_property (gobject_class, PROP_IGNORE_OBSCURE,
       g_param_spec_boolean ("ignore-obscure", "ignore-obscure",
@@ -658,13 +650,10 @@ gst_deinterlace_class_init (GstDeinterlaceClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * GstDeinterlace:drop-orphans
+   * GstDeinterlace:drop-orphans:
    *
    * This selects whether to drop orphan fields at the beginning of telecine
    * patterns in active locking mode.
-   *
-   * Since: 0.10.31
-   *
    */
   g_object_class_install_property (gobject_class, PROP_DROP_ORPHANS,
       g_param_spec_boolean ("drop-orphans", "drop-orphans",
@@ -2219,11 +2208,10 @@ gst_deinterlace_getcaps (GstDeinterlace * self, GstPad * pad, GstCaps * filter)
         gst_value_set_fraction (&nmax, n, d);
         gst_value_set_fraction_range (&nrange, &nmin, &nmax);
 
-        gst_structure_set_value (s, "framerate", &nrange);
+        gst_structure_take_value (s, "framerate", &nrange);
 
         g_value_unset (&nmin);
         g_value_unset (&nmax);
-        g_value_unset (&nrange);
       } else if (G_VALUE_TYPE (val) == GST_TYPE_LIST) {
         const GValue *lval;
         GValue nlist = { 0, };
@@ -2234,7 +2222,7 @@ gst_deinterlace_getcaps (GstDeinterlace * self, GstPad * pad, GstCaps * filter)
         for (i = gst_value_list_get_size (val); i > 0; i--) {
           gint n, d;
 
-          lval = gst_value_list_get_value (val, i);
+          lval = gst_value_list_get_value (val, i - 1);
 
           if (G_VALUE_TYPE (lval) != GST_TYPE_FRACTION)
             continue;
@@ -2251,11 +2239,9 @@ gst_deinterlace_getcaps (GstDeinterlace * self, GstPad * pad, GstCaps * filter)
           g_value_init (&nval, GST_TYPE_FRACTION);
 
           gst_value_set_fraction (&nval, n, d);
-          gst_value_list_append_value (&nlist, &nval);
-          g_value_unset (&nval);
+          gst_value_list_append_and_take_value (&nlist, &nval);
         }
-        gst_structure_set_value (s, "framerate", &nlist);
-        g_value_unset (&nlist);
+        gst_structure_take_value (s, "framerate", &nlist);
       }
     }
   }
