@@ -454,7 +454,7 @@ rtp_session_class_init (RTPSessionClass * klass)
    *  "sent-nack-count" G_TYPE_UINT   Number of NACKs sent
    *  "recv-nack-count" G_TYPE_UINT   Number of NACKs received
    *
-   * Since: 1.3.1
+   * Since: 1.4
    */
   g_object_class_install_property (gobject_class, PROP_STATS,
       g_param_spec_boxed ("stats", "Statistics",
@@ -1833,7 +1833,6 @@ rtp_session_process_rtp (RTPSession * sess, GstBuffer * buffer,
 collision:
   {
     RTP_SESSION_UNLOCK (sess);
-    gst_buffer_unref (buffer);
     clean_packet_info (&pinfo);
     GST_DEBUG ("ignoring packet because its collisioning");
     return GST_FLOW_OK;

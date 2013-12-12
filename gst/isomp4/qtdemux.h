@@ -106,6 +106,7 @@ struct _GstQTDemux {
   guint64 mdatoffset;
   guint64 first_mdat;
   gboolean got_moov;
+  guint64 last_moov_offset;
   guint header_size;
 
   GstTagList *tag_list;
@@ -133,6 +134,7 @@ struct _GstQTDemux {
   gboolean exposed;
   gboolean mss_mode; /* flag to indicate that we're working with a smoothstreaming fragment */
   guint64 fragment_start;
+  guint64 fragment_start_offset;
     
   gint64 chapters_track_id;
 

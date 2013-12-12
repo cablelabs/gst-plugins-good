@@ -500,6 +500,8 @@ gst_rtp_vorbis_pay_finish_headers (GstRTPBasePayload * basepayload)
   configuration = g_base64_encode (config, configlen);
 
   /* store for later re-sending */
+  if (rtpvorbispay->config_data)
+    g_free (rtpvorbispay->config_data);
   rtpvorbispay->config_size = configlen - 4 - 3 - 2;
   rtpvorbispay->config_data = g_malloc (rtpvorbispay->config_size);
   rtpvorbispay->config_extra_len = extralen;
@@ -727,7 +729,7 @@ gst_rtp_vorbis_pay_handle_buffer (GstRTPBasePayload * basepayload,
   GST_LOG_OBJECT (rtpvorbispay, "size %" G_GSIZE_FORMAT
       ", duration %" GST_TIME_FORMAT, size, GST_TIME_ARGS (duration));
 
-  if (G_UNLIKELY (size < 1 || size > 0xffff))
+  if (G_UNLIKELY (size < 1))
     goto wrong_size;
 
   /* find packet type */
@@ -759,8 +761,14 @@ gst_rtp_vorbis_pay_handle_buffer (GstRTPBasePayload * basepayload,
     ret = GST_FLOW_OK;
     goto done;
   } else if (rtpvorbispay->headers) {
-    if (!gst_rtp_vorbis_pay_finish_headers (basepayload))
-      goto header_error;
+    if (rtpvorbispay->need_headers) {
+      if (!gst_rtp_vorbis_pay_finish_headers (basepayload))
+        goto header_error;
+    } else {
+      g_list_free_full (rtpvorbispay->headers,
+          (GDestroyNotify) gst_buffer_unref);
+      rtpvorbispay->headers = NULL;
+    }
   }
 
   /* there is a config request, see if we need to insert it */
@@ -822,8 +830,7 @@ done:
 wrong_size:
   {
     GST_ELEMENT_WARNING (rtpvorbispay, STREAM, DECODE,
-        ("Invalid packet size (1 < %" G_GSIZE_FORMAT " <= 0xffff)", size),
-        (NULL));
+        ("Invalid packet size (1 < %" G_GSIZE_FORMAT ")", size), (NULL));
     gst_buffer_unmap (buffer, &map);
     gst_buffer_unref (buffer);
     return GST_FLOW_OK;

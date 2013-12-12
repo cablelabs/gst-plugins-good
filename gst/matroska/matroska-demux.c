@@ -62,6 +62,7 @@
 #include <gst/audio/audio.h>
 #include <gst/tag/tag.h>
 #include <gst/pbutils/pbutils.h>
+#include <gst/video/video.h>
 
 #include "matroska-demux.h"
 #include "matroska-ids.h"
@@ -2948,7 +2949,7 @@ gst_matroska_demux_add_wvpk_header (GstElement * element,
       GST_WRITE_UINT32_LE (outdata + outpos + 24, crc);
       outpos += 28;
 
-      g_memmove (outdata + outpos, data, blocksize);
+      memmove (outdata + outpos, data, blocksize);
       outpos += blocksize;
       data += blocksize;
       size -= blocksize;
@@ -4935,7 +4936,7 @@ gst_duration_to_fraction (guint64 duration, gint * dest_n, gint * dest_d)
     d = common_den[i];
     n = floor (0.5 + (d * 1e9) / duration);
     a = gst_util_uint64_scale_int (1000000000, d, n);
-    if (duration >= a - 1 && duration <= a + 1) {
+    if (duration >= a - 2 && duration <= a + 2) {
       goto out;
     }
   }
@@ -5027,28 +5028,25 @@ gst_matroska_demux_video_caps (GstMatroskaTrackVideoContext *
         g_free (vids);
     }
   } else if (!strcmp (codec_id, GST_MATROSKA_CODEC_ID_VIDEO_UNCOMPRESSED)) {
-    const gchar *format = NULL;
+    GstVideoInfo info;
+    GstVideoFormat format;
 
+    gst_video_info_init (&info);
     switch (videocontext->fourcc) {
       case GST_MAKE_FOURCC ('I', '4', '2', '0'):
-        *codec_name = g_strdup ("Raw planar YUV 4:2:0");
-        format = "I420";
+        format = GST_VIDEO_FORMAT_I420;
         break;
       case GST_MAKE_FOURCC ('Y', 'U', 'Y', '2'):
-        *codec_name = g_strdup ("Raw packed YUV 4:2:2");
-        format = "YUY2";
+        format = GST_VIDEO_FORMAT_YUY2;
         break;
       case GST_MAKE_FOURCC ('Y', 'V', '1', '2'):
-        *codec_name = g_strdup ("Raw packed YUV 4:2:0");
-        format = "YV12";
+        format = GST_VIDEO_FORMAT_YV12;
         break;
       case GST_MAKE_FOURCC ('U', 'Y', 'V', 'Y'):
-        *codec_name = g_strdup ("Raw packed YUV 4:2:2");
-        format = "UYVY";
+        format = GST_VIDEO_FORMAT_UYVY;
         break;
       case GST_MAKE_FOURCC ('A', 'Y', 'U', 'V'):
-        *codec_name = g_strdup ("Raw packed YUV 4:4:4 with alpha channel");
-        format = "AYUV";
+        format = GST_VIDEO_FORMAT_AYUV;
         break;
 
       default:
@@ -5057,8 +5055,10 @@ gst_matroska_demux_video_caps (GstMatroskaTrackVideoContext *
         return NULL;
     }
 
-    caps = gst_caps_new_simple ("video/x-raw",
-        "format", G_TYPE_STRING, format, NULL);
+    gst_video_info_set_format (&info, format, videocontext->pixel_width,
+        videocontext->pixel_height);
+    caps = gst_video_info_to_caps (&info);
+    *codec_name = gst_pb_utils_get_codec_description (caps);
   } else if (!strcmp (codec_id, GST_MATROSKA_CODEC_ID_VIDEO_MPEG4_SP)) {
     caps = gst_caps_new_simple ("video/x-divx",
         "divxversion", G_TYPE_INT, 4, NULL);
@@ -5229,19 +5229,14 @@ gst_matroska_demux_video_caps (GstMatroskaTrackVideoContext *
       }
 
       if (videocontext->default_fps > 0.0) {
-        GValue fps_double = { 0, };
-        GValue fps_fraction = { 0, };
+        gint fps_n, fps_d;
 
-        g_value_init (&fps_double, G_TYPE_DOUBLE);
-        g_value_init (&fps_fraction, GST_TYPE_FRACTION);
-        g_value_set_double (&fps_double, videocontext->default_fps);
-        g_value_transform (&fps_double, &fps_fraction);
+        gst_util_double_to_fraction (videocontext->default_fps, &fps_n, &fps_d);
 
-        GST_DEBUG ("using default fps %f", videocontext->default_fps);
+        GST_DEBUG ("using default fps %d/%d", fps_n, fps_d);
 
-        gst_structure_set_value (structure, "framerate", &fps_fraction);
-        g_value_unset (&fps_double);
-        g_value_unset (&fps_fraction);
+        gst_structure_set (structure, "framerate", GST_TYPE_FRACTION, fps_n,
+            fps_d, NULL);
       } else if (context->default_duration > 0) {
         int fps_n, fps_d;
 
