@@ -427,8 +427,14 @@ add_image_tag (ID3v2::Tag * id3v2tag, const GstTagList * list,
       mime_type = gst_structure_get_name (s);
       if (mime_type != NULL) {
         ID3v2::AttachedPictureFrame * frame;
-        const gchar *desc;
+        const gchar *desc = NULL;
         GstMapInfo map;
+        const GstStructure *info_struct;
+
+        info_struct = gst_sample_get_info (sample);
+        if (!info_struct
+            || !gst_structure_has_name (info_struct, "GstTagImageInfo"))
+          info_struct = NULL;
 
         if (strcmp (mime_type, "text/uri-list") == 0)
           mime_type = "-->";
@@ -447,14 +453,30 @@ add_image_tag (ID3v2::Tag * id3v2tag, const GstTagList * list,
 
         gst_buffer_unmap (image, &map);
 
-        desc = gst_structure_get_string (s, "image-description");
+        if (info_struct)
+          desc = gst_structure_get_string (info_struct, "image-description");
+
         frame->setDescription ((desc) ? desc : "");
 
-        /* FIXME set image type properly from caps */
         if (strcmp (tag, GST_TAG_PREVIEW_IMAGE) == 0) {
           frame->setType (ID3v2::AttachedPictureFrame::FileIcon);
         } else {
-          frame->setType (ID3v2::AttachedPictureFrame::Other);
+          int image_type;
+
+          if (info_struct) {
+            if (gst_structure_get (info_struct, "image-type",
+                    GST_TYPE_TAG_IMAGE_TYPE, &image_type, NULL)) {
+              if (image_type > 0 && image_type <= 18) {
+                image_type += 2;
+              } else {
+                image_type = ID3v2::AttachedPictureFrame::Other;
+              }
+            } else {
+              image_type = ID3v2::AttachedPictureFrame::Other;
+            }
+          }
+
+          frame->setType ((TagLib::ID3v2::AttachedPictureFrame::Type) image_type);
         }
       }
     } else {
