@@ -75,7 +75,6 @@
 #ifdef HAVE_STDLIB_H
 #include <stdlib.h>             /* atoi() */
 #endif
-#include <ctype.h>              /* toupper() */
 #include <stdio.h>              /* sscanf() */
 #include <gst/gstelement.h>
 #include <gst/gst-i18n-plugin.h>
@@ -562,8 +561,8 @@ gst_soup_http_src_add_range_header (GstSoupHTTPSrc * src, guint64 offset,
     GST_INFO_OBJECT (src, "Adding range to HEAD request");
     soup_message_headers_append (src->msg->request_headers, "Range", buf);
   } else if (src->msg->method == SOUP_METHOD_HEAD) {
-    // If this is a HEAD request include range to get content length in case
-    // server does not include by default
+    /* If this is a HEAD request include range to get content length in case
+     * server does not include by default */
     GST_INFO_OBJECT (src, "Adding range to HEAD request");
     soup_message_headers_append (src->msg->request_headers, "Range",
         "bytes=0-");
@@ -1475,7 +1474,7 @@ gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
   if ((header =
           soup_message_headers_get_one (src->msg->response_headers,
               "content-range")) != NULL) {
-    // Parse out size from string in format: bytes 0-168042671/168042672
+    /* Parse out size from string in format: bytes 0-168042671/168042672 */
     format = "BYTES%*[^/]/%" G_GUINT64_FORMAT;
   } else {
     GST_INFO_OBJECT (src,
@@ -1483,7 +1482,7 @@ gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
     return;
   }
 
-  // Convert to upper case
+  /* Convert to upper case */
   header_uppercase = g_ascii_strup (header, -1);
   if (sscanf (header_uppercase, format, &size) != 1) {
     GST_WARNING_OBJECT (src,
@@ -1498,7 +1497,7 @@ gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
   }
   g_free (header_uppercase);
 
-  // If now have size, update accordingly
+  /* If now have size, update accordingly */
   if (size > 0) {
     src->content_size = size;
     src->have_size = TRUE;
