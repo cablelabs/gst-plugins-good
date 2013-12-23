@@ -84,8 +84,6 @@ struct _GstSoupHTTPSrc {
                                 * handled as an error or EOS when the content
                                 * size is unknown */
 
-  gboolean exclude_range_header; /* do not include range header */
-
   /* Shoutcast/icecast metadata extraction handling. */
   gboolean iradio_mode;
   GstCaps *src_caps;
