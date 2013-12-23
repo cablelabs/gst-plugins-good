@@ -251,20 +251,20 @@ get_buffer_level (RTPJitterBuffer * jbuf)
   guint64 level;
 
   /* first first buffer with timestamp */
-  high_buf = (RTPJitterBufferItem *) g_queue_peek_head_link (jbuf->packets);
+  high_buf = (RTPJitterBufferItem *) g_queue_peek_tail_link (jbuf->packets);
   while (high_buf) {
     if (high_buf->dts != -1)
       break;
 
-    high_buf = (RTPJitterBufferItem *) g_list_next (high_buf);
+    high_buf = (RTPJitterBufferItem *) g_list_previous (high_buf);
   }
 
-  low_buf = (RTPJitterBufferItem *) g_queue_peek_tail_link (jbuf->packets);
+  low_buf = (RTPJitterBufferItem *) g_queue_peek_head_link (jbuf->packets);
   while (low_buf) {
     if (low_buf->dts != -1)
       break;
 
-    low_buf = (RTPJitterBufferItem *) g_list_previous (low_buf);
+    low_buf = (RTPJitterBufferItem *) g_list_next (low_buf);
   }
 
   if (!high_buf || !low_buf || high_buf == low_buf) {
@@ -653,10 +653,12 @@ rtp_jitter_buffer_insert (RTPJitterBuffer * jbuf, RTPJitterBufferItem * item,
   g_return_val_if_fail (jbuf != NULL, FALSE);
   g_return_val_if_fail (item != NULL, FALSE);
 
-  seqnum = item->seqnum;
   /* no seqnum, simply append then */
-  if (seqnum == -1)
+  if (item->seqnum == -1) {
     goto append;
+  }
+
+  seqnum = item->seqnum;
 
   /* loop the list to skip strictly smaller seqnum buffers */
   for (list = jbuf->packets->head; list; list = g_list_next (list)) {
@@ -664,9 +666,10 @@ rtp_jitter_buffer_insert (RTPJitterBuffer * jbuf, RTPJitterBufferItem * item,
     gint gap;
     RTPJitterBufferItem *qitem = (RTPJitterBufferItem *) list;
 
-    qseq = qitem->seqnum;
-    if (qseq == -1)
+    if (qitem->seqnum == -1)
       continue;
+
+    qseq = qitem->seqnum;
 
     /* compare the new seqnum to the one in the buffer */
     gap = gst_rtp_buffer_compare_seqnum (seqnum, qseq);
@@ -675,16 +678,16 @@ rtp_jitter_buffer_insert (RTPJitterBuffer * jbuf, RTPJitterBufferItem * item,
     if (G_UNLIKELY (gap == 0))
       goto duplicate;
 
-    /* seqnum > qseq, we can stop looking */
-    if (G_LIKELY (gap < 0))
+    /* seqnum < qseq, we can stop looking */
+    if (G_LIKELY (gap > 0))
       break;
   }
 
   dts = item->dts;
-  rtptime = item->rtptime;
-
-  if (rtptime == -1)
+  if (item->rtptime == -1)
     goto append;
+
+  rtptime = item->rtptime;
 
   /* rtp time jumps are checked for during skew calculation, but bypassed
    * in other mode, so mind those here and reset jb if needed.
@@ -777,13 +780,13 @@ rtp_jitter_buffer_pop (RTPJitterBuffer * jbuf, gint * percent)
 
   queue = jbuf->packets;
 
-  item = queue->tail;
+  item = queue->head;
   if (item) {
-    queue->tail = item->prev;
-    if (queue->tail)
-      queue->tail->next = NULL;
+    queue->head = item->next;
+    if (queue->head)
+      queue->head->prev = NULL;
     else
-      queue->head = NULL;
+      queue->tail = NULL;
     queue->length--;
   }
 
@@ -811,7 +814,7 @@ rtp_jitter_buffer_peek (RTPJitterBuffer * jbuf)
 {
   g_return_val_if_fail (jbuf != NULL, NULL);
 
-  return (RTPJitterBufferItem *) jbuf->packets->tail;
+  return (RTPJitterBufferItem *) jbuf->packets->head;
 }
 
 /**
