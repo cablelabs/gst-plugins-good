@@ -792,9 +792,13 @@ gst_soup_http_src_got_headers_cb (SoupMessage * msg, GstSoupHTTPSrc * src)
           gst_message_new_duration_changed (GST_OBJECT (src)));
     }
   } else {
-    /* Use HEAD response headers to determine content size if content-length not included */
-    GST_INFO_OBJECT (src, "Determine size based on HTTP HEAD response headers");
-    gst_soup_http_src_determine_size (src);
+    if (!src->have_size || (src->content_size != newsize)) {
+      /* Use HEAD response headers to determine content size if content-length
+       * not included */
+      GST_INFO_OBJECT (src,
+          "Determine size based on HTTP HEAD response headers");
+      gst_soup_http_src_determine_size (src);
+    }
   }
 
   /* Icecast stuff */
@@ -1449,6 +1453,8 @@ gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src)
     GST_INFO_OBJECT (src, "Soup http message: %s", log_str->str);
   } else
     GST_INFO_OBJECT (src, "Null soup http message");
+
+  g_string_free (log_str);
 }
 
 static void
