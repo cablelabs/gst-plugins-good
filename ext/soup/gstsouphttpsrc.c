@@ -792,7 +792,7 @@ gst_soup_http_src_got_headers_cb (SoupMessage * msg, GstSoupHTTPSrc * src)
           gst_message_new_duration_changed (GST_OBJECT (src)));
     }
   } else {
-    if (!src->have_size || (src->content_size != newsize)) {
+    if (!src->have_size) {
       /* Use HEAD response headers to determine content size if content-length
        * not included */
       GST_INFO_OBJECT (src,
@@ -1454,7 +1454,7 @@ gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src)
   } else
     GST_INFO_OBJECT (src, "Null soup http message");
 
-  g_string_free (log_str);
+  g_string_free (log_str, TRUE);
 }
 
 static void
@@ -1464,7 +1464,6 @@ gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
   const gchar *header;
   gchar *header_uppercase;
   GstBaseSrc *basesrc;
-  const gchar *format;
 
   if (!src->msg) {
     GST_INFO_OBJECT (src, "Unable to determine size due to null HTTP message");
@@ -1480,8 +1479,6 @@ gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
   if ((header =
           soup_message_headers_get_one (src->msg->response_headers,
               "content-range")) != NULL) {
-    /* Parse out size from string in format: bytes 0-168042671/168042672 */
-    format = "BYTES%*[^/]/%" G_GUINT64_FORMAT;
   } else {
     GST_INFO_OBJECT (src,
         "Unable to get size due to no content range header available");
@@ -1490,10 +1487,12 @@ gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
 
   /* Convert to upper case */
   header_uppercase = g_ascii_strup (header, -1);
-  if (sscanf (header_uppercase, format, &size) != 1) {
+
+  /* Parse out size from string in format: bytes 0-168042671/168042672 */
+  if (sscanf (header_uppercase, "BYTES%*[^/]/%" G_GUINT64_FORMAT, &size) != 1) {
     GST_WARNING_OBJECT (src,
-        "Problems parsing BYTES from header using format %s in HEAD response: %s",
-        format, header);
+        "Problem parsing BYTES from header with format %s in HEAD response: %s",
+        "BYTES%*[^/]/%" G_GUINT64_FORMAT, header);
     g_free (header_uppercase);
     return;
   } else {
