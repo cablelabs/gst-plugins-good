@@ -103,6 +103,8 @@ struct _GstSoupHTTPSrc {
 
 struct _GstSoupHTTPSrcClass {
   GstPushSrcClass parent_class;
+
+  GstStructure *(*adjust_headers) (GstElement * element, GstStructure * headers);
 };
 
 GType gst_soup_http_src_get_type (void);

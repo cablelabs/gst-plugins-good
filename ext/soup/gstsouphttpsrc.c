@@ -173,6 +173,10 @@ static gboolean
 gst_soup_http_src_set_size (GstSoupHTTPSrc * src, guint64 new_size);
 static void gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src);
 
+static GstStructure *gst_soup_http_src_adjust_headers (GstElement * element,
+    GstStructure * headers);
+static guint adjust_headers_signal = 0;
+
 #define gst_soup_http_src_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstSoupHTTPSrc, gst_soup_http_src, GST_TYPE_PUSH_SRC,
     G_IMPLEMENT_INTERFACE (GST_TYPE_URI_HANDLER,
@@ -281,6 +285,13 @@ gst_soup_http_src_class_init (GstSoupHTTPSrcClass * klass)
 
   gstpushsrc_class->create = GST_DEBUG_FUNCPTR (gst_soup_http_src_create);
 
+  adjust_headers_signal =
+      g_signal_new ("adjust-headers", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstSoupHTTPSrcClass, adjust_headers),
+      NULL, NULL, g_cclosure_marshal_generic, GST_TYPE_STRUCTURE, 1,
+      GST_TYPE_STRUCTURE | G_SIGNAL_TYPE_STATIC_SCOPE);
+  klass->adjust_headers = GST_DEBUG_FUNCPTR (gst_soup_http_src_adjust_headers);
+
   GST_DEBUG_CATEGORY_INIT (souphttpsrc_debug, "souphttpsrc", 0,
       "SOUP HTTP src");
 }
@@ -364,6 +375,18 @@ gst_soup_http_src_finalize (GObject * gobject)
   g_strfreev (src->cookies);
 
   G_OBJECT_CLASS (parent_class)->finalize (gobject);
+}
+
+static GstStructure *
+gst_soup_http_src_adjust_headers (GstElement * element, GstStructure * headers)
+{
+  GstStructure *adjusted_headers;
+  GstSoupHTTPSrc *src = GST_SOUP_HTTP_SRC (element);
+  adjusted_headers = gst_structure_copy (headers);
+  GST_INFO_OBJECT (src, "got headers %p: %s, returning %p: %s",
+      headers, gst_structure_to_string (headers),
+      adjusted_headers, gst_structure_to_string (adjusted_headers));
+  return adjusted_headers;
 }
 
 static void
@@ -1233,6 +1256,11 @@ gst_soup_http_src_parse_status (SoupMessage * msg, GstSoupHTTPSrc * src)
 static gboolean
 gst_soup_http_src_build_message (GstSoupHTTPSrc * src, const gchar * method)
 {
+  GstStructure *current_headers = NULL;
+  GstStructure *adjusted_headers = NULL;
+  gint i;
+  gint header_cnt = 0;
+
   src->msg = soup_message_new (method, src->location);
   if (!src->msg) {
     GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ,
@@ -1273,7 +1301,39 @@ gst_soup_http_src_build_message (GstSoupHTTPSrc * src, const gchar * method)
 
   gst_soup_http_src_add_extra_headers (src);
 
-  GST_DEBUG_OBJECT (src, "request headers:");
+  current_headers = gst_structure_new ("current_headers",
+      "transferMode.dlna.org", G_TYPE_STRING, "Streaming", NULL);
+
+  GST_INFO_OBJECT (src,
+      "Emit adjust headers signal: current hdrs %p: %s, adjusted hdrs %p: %s",
+      current_headers, gst_structure_to_string (current_headers),
+      adjusted_headers, gst_structure_to_string (adjusted_headers));
+
+  g_signal_emit (G_OBJECT (src),
+      adjust_headers_signal, 0, current_headers, &adjusted_headers);
+
+  if (adjusted_headers) {
+    GST_INFO_OBJECT (src, "returned adjusted headers %p: %s",
+        adjusted_headers, gst_structure_to_string (adjusted_headers));
+
+    soup_message_headers_clear (src->msg->request_headers);
+    header_cnt = gst_structure_n_fields (adjusted_headers);
+    for (i = 0; i < header_cnt; i++) {
+      soup_message_headers_append (src->msg->request_headers,
+          gst_structure_nth_field_name (adjusted_headers, i),
+          gst_structure_get_string (adjusted_headers,
+              gst_structure_nth_field_name (adjusted_headers, i)));
+    }
+    gst_structure_free (adjusted_headers);
+  } else
+    GST_INFO_OBJECT (src, "Returned adjusted headers %p were NULL",
+        adjusted_headers);
+
+  /* *TODO* - Need to free this but causes a crash
+     gst_structure_free(current_headers);
+   */
+
+  GST_INFO_OBJECT (src, "request headers:");
   soup_message_headers_foreach (src->msg->request_headers,
       gst_soup_http_src_headers_foreach, src);
 
