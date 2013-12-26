@@ -108,7 +108,6 @@ enum
   PROP_IRADIO_MODE,
   PROP_TIMEOUT,
   PROP_EXTRA_HEADERS,
-  PROP_EXCLUDE_RANGE_HEADER,
   PROP_CONTENT_SIZE
 };
 
@@ -255,10 +254,6 @@ gst_soup_http_src_class_init (GstSoupHTTPSrcClass * klass)
           "Enable internet radio mode (ask server to send shoutcast/icecast "
           "metadata interleaved with the actual stream data)",
           DEFAULT_IRADIO_MODE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_EXCLUDE_RANGE_HEADER,
-      g_param_spec_boolean ("exclude-range-header", "exclude-range-header",
-          "Exclude range header in HTTP requests",
-          FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class, PROP_CONTENT_SIZE,
       g_param_spec_uint64 ("content-size", "Content size in bytes",
           "Size in bytes of content associated with URI",
@@ -336,7 +331,6 @@ gst_soup_http_src_init (GstSoupHTTPSrc * src)
   src->proxy_pw = NULL;
   src->cookies = NULL;
   src->iradio_mode = DEFAULT_IRADIO_MODE;
-  src->exclude_range_header = FALSE;
   src->loop = NULL;
   src->context = NULL;
   src->session = NULL;
@@ -383,9 +377,10 @@ gst_soup_http_src_adjust_headers (GstElement * element, GstStructure * headers)
   GstStructure *adjusted_headers;
   GstSoupHTTPSrc *src = GST_SOUP_HTTP_SRC (element);
   adjusted_headers = gst_structure_copy (headers);
-  GST_INFO_OBJECT (src, "got headers %p: %s, returning %p: %s",
-      headers, gst_structure_to_string (headers),
-      adjusted_headers, gst_structure_to_string (adjusted_headers));
+  if (adjusted_headers)
+    GST_INFO_OBJECT (src, "got headers %p: %s, returning %p: %s",
+        headers, gst_structure_to_string (headers),
+        adjusted_headers, gst_structure_to_string (adjusted_headers));
   return adjusted_headers;
 }
 
@@ -478,9 +473,6 @@ gst_soup_http_src_set_property (GObject * object, guint prop_id,
       src->extra_headers = s ? gst_structure_copy (s) : NULL;
       break;
     }
-    case PROP_EXCLUDE_RANGE_HEADER:
-      src->exclude_range_header = g_value_get_boolean (value);
-      break;
     case PROP_CONTENT_SIZE:
       gst_soup_http_src_set_size (src, g_value_get_uint64 (value));
       break;
@@ -545,9 +537,6 @@ gst_soup_http_src_get_property (GObject * object, guint prop_id,
     case PROP_EXTRA_HEADERS:
       gst_value_set_structure (value, src->extra_headers);
       break;
-    case PROP_EXCLUDE_RANGE_HEADER:
-      g_value_set_boolean (value, src->exclude_range_header);
-      break;
     case PROP_CONTENT_SIZE:
       g_value_set_uint64 (value, src->content_size);
       break;
@@ -596,7 +585,7 @@ gst_soup_http_src_add_range_header (GstSoupHTTPSrc * src, guint64 offset,
   gint rc;
 
   soup_message_headers_remove (src->msg->request_headers, "Range");
-  if ((offset || stop_offset != -1) && (!src->exclude_range_header)) {
+  if (offset || stop_offset != -1) {
     if (stop_offset != -1) {
       rc = g_snprintf (buf, sizeof (buf), "bytes=%" G_GUINT64_FORMAT "-%"
           G_GUINT64_FORMAT, offset, stop_offset);
@@ -610,8 +599,7 @@ gst_soup_http_src_add_range_header (GstSoupHTTPSrc * src, guint64 offset,
     }
     GST_INFO_OBJECT (src, "Adding range to HEAD request");
     soup_message_headers_append (src->msg->request_headers, "Range", buf);
-  } else if ((src->msg->method == SOUP_METHOD_HEAD)
-      && (!src->exclude_range_header)) {
+  } else if (src->msg->method == SOUP_METHOD_HEAD) {
     // If this is a HEAD request include range to get content length in case
     // server does not include by default
     GST_INFO_OBJECT (src, "Adding range to HEAD request");
@@ -1303,11 +1291,6 @@ gst_soup_http_src_build_message (GstSoupHTTPSrc * src, const gchar * method)
 
   current_headers = gst_structure_new ("current_headers",
       "transferMode.dlna.org", G_TYPE_STRING, "Streaming", NULL);
-
-  GST_INFO_OBJECT (src,
-      "Emit adjust headers signal: current hdrs %p: %s, adjusted hdrs %p: %s",
-      current_headers, gst_structure_to_string (current_headers),
-      adjusted_headers, gst_structure_to_string (adjusted_headers));
 
   g_signal_emit (G_OBJECT (src),
       adjust_headers_signal, 0, current_headers, &adjusted_headers);
