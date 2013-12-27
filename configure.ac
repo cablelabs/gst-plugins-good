@@ -960,7 +960,8 @@ AG_GST_CHECK_FEATURE(VPX, [VPX decoder], vpx, [
       HAVE_VP8=yes
       AC_DEFINE(HAVE_VP8_DECODER, 1, [Defined if the VP8 decoder is available])
     ])
-    if test "x$BUILD_EXPERIMENTAL" = "xyes"; then
+
+    PKG_CHECK_MODULES(VPX_130, vpx >= 1.3.0, [
       AC_CHECK_LIB(vpx, vpx_codec_vp9_cx_algo, [
         HAVE_VP9=yes
         AC_DEFINE(HAVE_VP9_ENCODER, 1, [Defined if the VP9 encoder is available])
@@ -969,7 +970,7 @@ AG_GST_CHECK_FEATURE(VPX, [VPX decoder], vpx, [
         HAVE_VP9=yes
         AC_DEFINE(HAVE_VP9_DECODER, 1, [Defined if the VP9 decoder is available])
       ])
-    fi
+    ], [true])
     LIBS="$OLD_LIBS"
     CFLAGS="$OLD_CFLAGS"
   fi
