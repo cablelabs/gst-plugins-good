@@ -165,7 +165,8 @@ static void gst_soup_http_src_finished_cb (SoupMessage * msg,
 static void gst_soup_http_src_authenticate_cb (SoupSession * session,
     SoupMessage * msg, SoupAuth * auth, gboolean retrying,
     GstSoupHTTPSrc * src);
-static void gst_soup_http_src_determine_size (GstSoupHTTPSrc * src);
+static void gst_soup_http_src_determine_size (SoupMessage * msg,
+    GstSoupHTTPSrc * src);
 static void gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src);
 
 #define gst_soup_http_src_parent_class parent_class
@@ -750,8 +751,6 @@ gst_soup_http_src_got_headers_cb (SoupMessage * msg, GstSoupHTTPSrc * src)
 {
   const char *value;
   GstTagList *tag_list;
-  GstBaseSrc *basesrc;
-  guint64 newsize;
   GHashTable *params = NULL;
 
   gst_soup_http_src_log_http_info (src);
@@ -772,34 +771,7 @@ gst_soup_http_src_got_headers_cb (SoupMessage * msg, GstSoupHTTPSrc * src)
 
   src->session_io_status = GST_SOUP_HTTP_SRC_SESSION_IO_STATUS_RUNNING;
   src->got_headers = TRUE;
-
-  /* Parse Content-Length. */
-  if (soup_message_headers_get_encoding (msg->response_headers) ==
-      SOUP_ENCODING_CONTENT_LENGTH) {
-    newsize = src->request_position +
-        soup_message_headers_get_content_length (msg->response_headers);
-    if (!src->have_size || (src->content_size != newsize)) {
-      src->content_size = newsize;
-      src->have_size = TRUE;
-      src->seekable = TRUE;
-      GST_INFO_OBJECT (src,
-          "Got content-length, setting size = %" G_GUINT64_FORMAT,
-          src->content_size);
-
-      basesrc = GST_BASE_SRC_CAST (src);
-      basesrc->segment.duration = src->content_size;
-      gst_element_post_message (GST_ELEMENT (src),
-          gst_message_new_duration_changed (GST_OBJECT (src)));
-    }
-  } else {
-    if (!src->have_size) {
-      /* Use HEAD response headers to determine content size if content-length
-       * not included */
-      GST_INFO_OBJECT (src,
-          "Determine size based on HTTP HEAD response headers");
-      gst_soup_http_src_determine_size (src);
-    }
-  }
+  gst_soup_http_src_determine_size (msg, src);
 
   /* Icecast stuff */
   tag_list = gst_tag_list_new_empty ();
@@ -1458,12 +1430,36 @@ gst_soup_http_src_log_http_info (GstSoupHTTPSrc * src)
 }
 
 static void
-gst_soup_http_src_determine_size (GstSoupHTTPSrc * src)
+gst_soup_http_src_determine_size (SoupMessage * msg, GstSoupHTTPSrc * src)
 {
   guint64 size;
   const gchar *header;
   gchar *header_uppercase;
   GstBaseSrc *basesrc;
+  guint64 newsize;
+
+  /* Parse Content-Length. */
+  if (soup_message_headers_get_encoding (msg->response_headers) ==
+      SOUP_ENCODING_CONTENT_LENGTH) {
+    newsize = src->request_position +
+        soup_message_headers_get_content_length (msg->response_headers);
+    if (!src->have_size || (src->content_size != newsize)) {
+      src->content_size = newsize;
+      src->have_size = TRUE;
+      src->seekable = TRUE;
+      GST_INFO_OBJECT (src,
+          "Got content-length, setting size = %" G_GUINT64_FORMAT,
+          src->content_size);
+
+      basesrc = GST_BASE_SRC_CAST (src);
+      basesrc->segment.duration = src->content_size;
+      gst_element_post_message (GST_ELEMENT (src),
+          gst_message_new_duration_changed (GST_OBJECT (src)));
+      return;
+    }
+  }
+
+  GST_INFO_OBJECT (src, "Determine size based on HTTP HEAD response headers");
 
   if (!src->msg) {
     GST_INFO_OBJECT (src, "Unable to determine size due to null HTTP message");
