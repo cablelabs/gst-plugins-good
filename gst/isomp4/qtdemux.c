@@ -440,6 +440,8 @@ static gboolean gst_qtdemux_handle_sink_event (GstPad * pad, GstObject * parent,
 static gboolean gst_qtdemux_setcaps (GstQTDemux * qtdemux, GstCaps * caps);
 static gboolean gst_qtdemux_configure_stream (GstQTDemux * qtdemux,
     QtDemuxStream * stream);
+static GstFlowReturn gst_qtdemux_process_adapter (GstQTDemux * demux,
+    gboolean force);
 
 static gboolean qtdemux_parse_moov (GstQTDemux * qtdemux,
     const guint8 * buffer, guint length);
@@ -909,7 +911,6 @@ gst_qtdemux_push_pending_newsegment (GstQTDemux * qtdemux)
   if (qtdemux->pending_newsegment) {
     gst_qtdemux_push_event (qtdemux, qtdemux->pending_newsegment);
     qtdemux->pending_newsegment = NULL;
-    qtdemux->upstream_newsegment = FALSE;
   }
 }
 
@@ -1557,7 +1558,7 @@ gst_qtdemux_handle_src_event (GstPad * pad, GstObject * parent,
       GstClockTime ts = gst_util_get_timestamp ();
 #endif
 
-      if (qtdemux->mss_mode || qtdemux->fragmented) {
+      if (qtdemux->upstream_newsegment || qtdemux->fragmented) {
         /* seek should be handled by upstream, we might need to re-download fragments */
         GST_DEBUG_OBJECT (qtdemux,
             "leting upstream handle seek for smoothstreaming");
@@ -1787,6 +1788,8 @@ gst_qtdemux_setcaps (GstQTDemux * demux, GstCaps * caps)
       }
     }
     gst_caps_replace (&demux->media_caps, (GstCaps *) mediacaps);
+  } else {
+    demux->mss_mode = FALSE;
   }
 
   return TRUE;
@@ -1800,7 +1803,7 @@ gst_qtdemux_reset (GstQTDemux * qtdemux, gboolean hard)
   GST_DEBUG_OBJECT (qtdemux, "Resetting demux");
   gst_pad_stop_task (qtdemux->sinkpad);
 
-  if (hard || qtdemux->mss_mode) {
+  if (hard || qtdemux->upstream_newsegment) {
     qtdemux->state = QTDEMUX_STATE_INITIAL;
     qtdemux->neededbytes = 16;
     qtdemux->todrop = 0;
@@ -1837,7 +1840,7 @@ gst_qtdemux_reset (GstQTDemux * qtdemux, gboolean hard)
     if (qtdemux->pending_newsegment)
       gst_event_unref (qtdemux->pending_newsegment);
     qtdemux->pending_newsegment = NULL;
-    qtdemux->upstream_newsegment = TRUE;
+    qtdemux->upstream_newsegment = FALSE;
     qtdemux->upstream_seekable = FALSE;
     qtdemux->upstream_size = 0;
 
@@ -1887,7 +1890,7 @@ gst_qtdemux_handle_sink_event (GstPad * sinkpad, GstObject * parent,
     GstEvent * event)
 {
   GstQTDemux *demux = GST_QTDEMUX (parent);
-  gboolean res;
+  gboolean res = TRUE;
 
   GST_LOG_OBJECT (demux, "handling %s event", GST_EVENT_TYPE_NAME (event));
 
@@ -1912,11 +1915,9 @@ gst_qtdemux_handle_sink_event (GstPad * sinkpad, GstObject * parent,
       } else {
         GST_DEBUG_OBJECT (demux, "Not storing upstream newsegment, "
             "not in time format");
-      }
 
-      /* chain will send initial newsegment after pads have been added */
-      if (demux->state != QTDEMUX_STATE_MOVIE || !demux->n_streams) {
-        if (!demux->mss_mode) {
+        /* chain will send initial newsegment after pads have been added */
+        if (demux->state != QTDEMUX_STATE_MOVIE || !demux->n_streams) {
           GST_DEBUG_OBJECT (demux, "still starting, eating event");
           goto exit;
         }
@@ -2000,7 +2001,7 @@ gst_qtdemux_handle_sink_event (GstPad * sinkpad, GstObject * parent,
         demux->neededbytes = demux->todrop + stream->samples[idx].size;
       } else {
         /* set up for EOS */
-        if (demux->mss_mode) {
+        if (demux->upstream_newsegment) {
           demux->neededbytes = 16;
         } else {
           demux->neededbytes = -1;
@@ -2036,6 +2037,13 @@ gst_qtdemux_handle_sink_event (GstPad * sinkpad, GstObject * parent,
         }
         if (!has_valid_stream)
           gst_qtdemux_post_no_playable_stream_error (demux);
+        else {
+          GST_DEBUG_OBJECT (demux, "Data still available after EOS: %u",
+              (guint) gst_adapter_available (demux->adapter));
+          if (gst_qtdemux_process_adapter (demux, TRUE) != GST_FLOW_OK) {
+            res = FALSE;
+          }
+        }
       }
       break;
     case GST_EVENT_CAPS:{
@@ -2052,7 +2060,7 @@ gst_qtdemux_handle_sink_event (GstPad * sinkpad, GstObject * parent,
       break;
   }
 
-  res = gst_pad_event_default (demux->sinkpad, parent, event);
+  res = gst_pad_event_default (demux->sinkpad, parent, event) & res;
 
 drop:
   return res;
@@ -4593,22 +4601,29 @@ static GstFlowReturn
 gst_qtdemux_chain (GstPad * sinkpad, GstObject * parent, GstBuffer * inbuf)
 {
   GstQTDemux *demux;
-  GstFlowReturn ret = GST_FLOW_OK;
-  demux = GST_QTDEMUX (parent);
 
+  demux = GST_QTDEMUX (parent);
   gst_adapter_push (demux->adapter, inbuf);
+
+  GST_DEBUG_OBJECT (demux,
+      "pushing in inbuf %p, neededbytes:%u, available:%" G_GSIZE_FORMAT, inbuf,
+      demux->neededbytes, gst_adapter_available (demux->adapter));
+
+  return gst_qtdemux_process_adapter (demux, FALSE);
+}
+
+static GstFlowReturn
+gst_qtdemux_process_adapter (GstQTDemux * demux, gboolean force)
+{
+  GstFlowReturn ret = GST_FLOW_OK;
 
   /* we never really mean to buffer that much */
   if (demux->neededbytes == -1) {
     goto eos;
   }
 
-  GST_DEBUG_OBJECT (demux,
-      "pushing in inbuf %p, neededbytes:%u, available:%" G_GSIZE_FORMAT, inbuf,
-      demux->neededbytes, gst_adapter_available (demux->adapter));
-
   while (((gst_adapter_available (demux->adapter)) >= demux->neededbytes) &&
-      (ret == GST_FLOW_OK)) {
+      (ret == GST_FLOW_OK || (ret == GST_FLOW_NOT_LINKED && force))) {
 
     GST_DEBUG_OBJECT (demux,
         "state:%d , demux->neededbytes:%d, demux->offset:%" G_GUINT64_FORMAT,
