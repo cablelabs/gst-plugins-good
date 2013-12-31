@@ -1437,6 +1437,7 @@ gst_soup_http_src_determine_size (SoupMessage * msg, GstSoupHTTPSrc * src)
   gchar *header_uppercase;
   GstBaseSrc *basesrc;
   guint64 newsize;
+  gboolean post_duration_changed = FALSE;
 
   /* Parse Content-Length. */
   if (soup_message_headers_get_encoding (msg->response_headers) ==
@@ -1450,12 +1451,7 @@ gst_soup_http_src_determine_size (SoupMessage * msg, GstSoupHTTPSrc * src)
       GST_INFO_OBJECT (src,
           "Got content-length, setting size = %" G_GUINT64_FORMAT,
           src->content_size);
-
-      basesrc = GST_BASE_SRC_CAST (src);
-      basesrc->segment.duration = src->content_size;
-      gst_element_post_message (GST_ELEMENT (src),
-          gst_message_new_duration_changed (GST_OBJECT (src)));
-      return;
+      post_duration_changed = TRUE;
     }
   }
 
@@ -1505,13 +1501,16 @@ gst_soup_http_src_determine_size (SoupMessage * msg, GstSoupHTTPSrc * src)
     src->seekable = TRUE;
     GST_INFO_OBJECT (src, "Set seekable with size = %" G_GUINT64_FORMAT,
         src->content_size);
+    post_duration_changed = TRUE;
+  } else
+    GST_INFO_OBJECT (src, "Got size 0 from content range header");
 
+  if (post_duration_changed) {
     basesrc = GST_BASE_SRC_CAST (src);
     basesrc->segment.duration = src->content_size;
     gst_element_post_message (GST_ELEMENT (src),
         gst_message_new_duration_changed (GST_OBJECT (src)));
-  } else
-    GST_INFO_OBJECT (src, "Got size 0 from content range header");
+  }
 }
 
 static void
