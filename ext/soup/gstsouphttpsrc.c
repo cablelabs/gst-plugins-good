@@ -783,7 +783,8 @@ gst_soup_http_src_got_headers_cb (SoupMessage * msg, GstSoupHTTPSrc * src)
 
   gst_soup_http_src_log_http_info (src);
 
-  if (msg->status_code == 407 && src->proxy_id && src->proxy_pw)
+  if (msg->status_code == SOUP_STATUS_PROXY_AUTHENTICATION_REQUIRED &&
+      src->proxy_id && src->proxy_pw)
     return;
 
   if (src->automatic_redirect && SOUP_STATUS_IS_REDIRECTION (msg->status_code)) {
