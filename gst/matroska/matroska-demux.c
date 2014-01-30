@@ -3225,6 +3225,7 @@ gst_matroska_demux_parse_blockgroup_or_simpleblock (GstMatroskaDemux * demux,
       {
         guint64 num;
         guint8 *data;
+        guint64 buffer_offset = ebml->offset;
 
         if (buf) {
           gst_buffer_unmap (buf, &map);
@@ -3237,6 +3238,7 @@ gst_matroska_demux_parse_blockgroup_or_simpleblock (GstMatroskaDemux * demux,
         gst_buffer_map (buf, &map, GST_MAP_READ);
         data = map.data;
         size = map.size;
+        GST_BUFFER_OFFSET (buf) = buffer_offset;
 
         /* first byte(s): blocknum */
         if ((n = gst_matroska_ebmlnum_uint (data, size, &num)) < 0)
@@ -3428,6 +3430,7 @@ gst_matroska_demux_parse_blockgroup_or_simpleblock (GstMatroskaDemux * demux,
     gboolean delta_unit = FALSE;
     guint64 duration = 0;
     gint64 lace_time = 0;
+    guint64 lace_offset = GST_BUFFER_OFFSET (buf);
 
     stream = g_ptr_array_index (demux->common.src, stream_num);
 
@@ -3585,6 +3588,9 @@ gst_matroska_demux_parse_blockgroup_or_simpleblock (GstMatroskaDemux * demux,
       sub = gst_buffer_copy_region (buf, GST_BUFFER_COPY_ALL,
           gst_buffer_get_size (buf) - size, lace_size[n]);
       GST_DEBUG_OBJECT (demux, "created subbuffer %p", sub);
+
+      GST_BUFFER_OFFSET (sub) = lace_offset;
+      lace_offset += lace_size[n];
 
       if (delta_unit)
         GST_BUFFER_FLAG_SET (sub, GST_BUFFER_FLAG_DELTA_UNIT);
