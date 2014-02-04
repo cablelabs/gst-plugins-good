@@ -142,6 +142,7 @@ check_PROGRAMS = \
 	elements/rganalysis \
 	elements/rglimiter \
 	elements/rgvolume \
+	elements/rtpaux \
 	elements/rtpcollision \
 	elements/rtp-payloading \
 	elements/rtpbin \
@@ -149,6 +150,7 @@ check_PROGRAMS = \
 	elements/rtpbin_buffer_list \
 	elements/rtpjitterbuffer \
 	elements/rtpmux \
+	elements/rtprtx \
 	elements/shapewipe \
 	elements/spectrum \
 	elements/udpsink \
@@ -324,11 +326,17 @@ elements_videofilter_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstvideo-$(GST_API_VERSI
 elements_rtpjitterbuffer_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(CFLAGS) $(AM_CFLAGS)
 elements_rtpjitterbuffer_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
 
+elements_rtprtx_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(CFLAGS) $(AM_CFLAGS)
+elements_rtprtx_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
+
 elements_rtpsession_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(CFLAGS) $(AM_CFLAGS)
 elements_rtpsession_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
 
 elements_rtpcollision_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(CFLAGS) $(AM_CFLAGS)
 elements_rtpcollision_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstnet-$(GST_API_VERSION) -lgstrtp-$(GST_API_VERSION) $(GIO_LIBS) $(LDADD)
+
+elements_rtpaux_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(CFLAGS) $(AM_CFLAGS)
+elements_rtpaux_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
 
 # FIXME: configure should check for gdk-pixbuf not gtk
 # only need video.h header, not the lib

@@ -325,7 +325,7 @@ rtp_session_class_init (RTPSessionClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_INTERNAL_SSRC,
       g_param_spec_uint ("internal-ssrc", "Internal SSRC",
-          "The internal SSRC used for the session (deprecated)",
+          "The internal SSRC used for the session",
           0, G_MAXUINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_INTERNAL_SOURCE,
@@ -607,8 +607,9 @@ rtp_session_set_property (GObject * object, guint prop_id,
 
   switch (prop_id) {
     case PROP_INTERNAL_SSRC:
-      GST_ERROR_OBJECT (object, "Setting the \"internal-ssrc\" property"
-          " is deprecated and ignored");
+      RTP_SESSION_LOCK (sess);
+      sess->suggested_ssrc = g_value_get_uint (value);
+      RTP_SESSION_UNLOCK (sess);
       break;
     case PROP_BANDWIDTH:
       RTP_SESSION_LOCK (sess);
@@ -2367,10 +2368,10 @@ rtp_session_process_nack (RTPSession * sess, guint32 sender_ssrc,
     seqnum = GST_READ_UINT16_BE (fci_data);
     blp = GST_READ_UINT16_BE (fci_data + 2);
 
-    GST_DEBUG ("NACK #%u, blp %04x", seqnum, blp);
+    GST_DEBUG ("NACK #%u, blp %04x, SSRC 0x%08x", seqnum, blp, media_ssrc);
 
     RTP_SESSION_UNLOCK (sess);
-    sess->callbacks.notify_nack (sess, seqnum, blp,
+    sess->callbacks.notify_nack (sess, seqnum, blp, media_ssrc,
         sess->notify_nack_user_data);
     RTP_SESSION_LOCK (sess);
 

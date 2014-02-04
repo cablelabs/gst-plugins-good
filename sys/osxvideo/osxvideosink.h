@@ -40,14 +40,6 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_debug_osx_video_sink);
 #define GST_CAT_DEFAULT gst_debug_osx_video_sink
 
-/* The hack doesn't work on leopard, the _CFMainPThread symbol
- * is doesn't exist in the CoreFoundation library */
-#if MAC_OS_X_VERSION_MIN_REQUIRED <= MAC_OS_X_VERSION_10_5
-#ifdef RUN_NS_APP_THREAD
-#undef RUN_NS_APP_THREAD
-#endif
-#endif
-
 G_BEGIN_DECLS
 
 #define GST_TYPE_OSX_VIDEO_SINK \
@@ -97,20 +89,14 @@ struct _GstOSXVideoSinkClass {
   GstVideoSinkClass parent_class;
 
   GstOSXVideoSinkRunLoopState run_loop_state;
-#ifdef RUN_NS_APP_THREAD
   NSThread *ns_app_thread;
-#else
-  guint cocoa_timeout;
-#endif
 };
 
 GType gst_osx_video_sink_get_type(void);
 
-#if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_4
 @interface NSApplication(AppleMenu)
 - (void)setAppleMenu:(NSMenu *)menu;
 @end
-#endif
 
 @interface GstBufferObject : NSObject
 {
@@ -122,11 +108,7 @@ GType gst_osx_video_sink_get_type(void);
 @end
 
 
-#if MAC_OS_X_VERSION_MIN_REQUIRED <= MAC_OS_X_VERSION_10_5
-@interface GstWindowDelegate : NSObject
-#else
 @interface GstWindowDelegate : NSObject <NSWindowDelegate>
-#endif
 {
   @public
   GstOSXVideoSink *osxvideosink;
@@ -146,11 +128,9 @@ GType gst_osx_video_sink_get_type(void);
 -(void) destroy;
 -(void) showFrame: (GstBufferObject*) buf;
 -(void) setView: (NSView*) view;
-#ifdef RUN_NS_APP_THREAD
 + (BOOL) isMainThread;
 -(void) nsAppThread;
 -(void) checkMainRunLoop;
-#endif
 @end
 
 G_END_DECLS

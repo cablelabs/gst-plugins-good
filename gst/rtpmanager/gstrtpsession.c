@@ -273,7 +273,7 @@ static void gst_rtp_session_request_key_unit (RTPSession * sess,
 static GstClockTime gst_rtp_session_request_time (RTPSession * session,
     gpointer user_data);
 static void gst_rtp_session_notify_nack (RTPSession * sess,
-    guint16 seqnum, guint16 blp, gpointer user_data);
+    guint16 seqnum, guint16 blp, guint32 ssrc, gpointer user_data);
 
 static RTPSessionCallbacks callbacks = {
   gst_rtp_session_process_rtp,
@@ -333,9 +333,25 @@ on_ssrc_collision (RTPSession * session, RTPSource * src, GstRtpSession * sess)
   GST_RTP_SESSION_UNLOCK (sess);
 
   if (send_rtp_sink) {
-    GstEvent *event = gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
-        gst_structure_new ("GstRTPCollision", "ssrc", G_TYPE_UINT,
-            (guint) src->ssrc, NULL));
+    GstStructure *structure;
+    GstEvent *event;
+    RTPSource *internal_src;
+    guint32 suggested_ssrc;
+
+    structure = gst_structure_new ("GstRTPCollision", "ssrc", G_TYPE_UINT,
+        (guint) src->ssrc, NULL);
+
+    /* if there is no source using the suggested ssrc, most probably because
+     * this ssrc has just collided, suggest upstream to use it */
+    suggested_ssrc = rtp_session_suggest_ssrc (session);
+    internal_src = rtp_session_get_source_by_ssrc (session, suggested_ssrc);
+    if (!internal_src)
+      gst_structure_set (structure, "suggested-ssrc", G_TYPE_UINT,
+          (guint) suggested_ssrc, NULL);
+    else
+      g_object_unref (internal_src);
+
+    event = gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM, structure);
     gst_pad_push_event (send_rtp_sink, event);
     gst_object_unref (send_rtp_sink);
   }
@@ -1480,6 +1496,27 @@ gst_rtp_session_event_recv_rtp_sink (GstPad * pad, GstObject * parent,
       ret = gst_pad_push_event (rtpsession->recv_rtp_src, event);
       break;
     }
+    case GST_EVENT_EOS:
+    {
+      GstPad *rtcp_src;
+
+      ret =
+          gst_pad_push_event (rtpsession->recv_rtp_src, gst_event_ref (event));
+
+      GST_RTP_SESSION_LOCK (rtpsession);
+      if ((rtcp_src = rtpsession->send_rtcp_src))
+        gst_object_ref (rtcp_src);
+      GST_RTP_SESSION_UNLOCK (rtpsession);
+
+      if (rtcp_src) {
+        ret = gst_pad_push_event (rtcp_src, event);
+        gst_object_unref (rtcp_src);
+      } else {
+        gst_event_unref (event);
+        ret = TRUE;
+      }
+      break;
+    }
     default:
       ret = gst_pad_push_event (rtpsession->recv_rtp_src, event);
       break;
@@ -1551,7 +1588,7 @@ gst_rtp_session_event_recv_rtp_src (GstPad * pad, GstObject * parent,
           forward = FALSE;
       } else if (gst_structure_has_name (s, "GstRTPRetransmissionRequest")) {
         GstClockTime running_time;
-        guint seqnum, delay, deadline, max_delay;
+        guint seqnum, delay, deadline, max_delay, avg_rtt;
 
         GST_RTP_SESSION_LOCK (rtpsession);
         rtpsession->priv->rtx_count++;
@@ -1567,14 +1604,16 @@ gst_rtp_session_event_recv_rtp_src (GstPad * pad, GstObject * parent,
           delay = 0;
         if (!gst_structure_get_uint (s, "deadline", &deadline))
           deadline = 100;
+        if (!gst_structure_get_uint (s, "avg-rtt", &avg_rtt))
+          avg_rtt = 40;
 
         /* remaining time to receive the packet */
         max_delay = deadline;
         if (max_delay > delay)
           max_delay -= delay;
         /* estimated RTT */
-        if (max_delay > 40)
-          max_delay -= 40;
+        if (max_delay > avg_rtt)
+          max_delay -= avg_rtt;
         else
           max_delay = 0;
 
@@ -2401,7 +2440,7 @@ gst_rtp_session_request_time (RTPSession * session, gpointer user_data)
 
 static void
 gst_rtp_session_notify_nack (RTPSession * sess, guint16 seqnum,
-    guint16 blp, gpointer user_data)
+    guint16 blp, guint32 ssrc, gpointer user_data)
 {
   GstRtpSession *rtpsession = GST_RTP_SESSION (user_data);
   GstEvent *event;
@@ -2416,7 +2455,8 @@ gst_rtp_session_notify_nack (RTPSession * sess, guint16 seqnum,
     while (TRUE) {
       event = gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM,
           gst_structure_new ("GstRTPRetransmissionRequest",
-              "seqnum", G_TYPE_UINT, (guint) seqnum, NULL));
+              "seqnum", G_TYPE_UINT, (guint) seqnum,
+              "ssrc", G_TYPE_UINT, (guint) ssrc, NULL));
       gst_pad_push_event (send_rtp_sink, event);
 
       if (blp == 0)

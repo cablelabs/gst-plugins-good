@@ -1104,6 +1104,7 @@ gst_matroska_read_common_parse_chapter_edition (GstMatroskaReadCommon * common,
 
   for (l = subentries; l; l = l->next)
     gst_toc_entry_append_sub_entry (edition_info, l->data);
+  g_list_free (subentries);
 
   if (is_hidden == 0 && subentries != NULL && ret == GST_FLOW_OK)
     gst_toc_append_entry (toc, edition_info);
@@ -1301,6 +1302,8 @@ exit:
     if (version <= 2) {
       if (doctype) {
         GST_INFO_OBJECT (common, "Input is %s version %d", doctype, version);
+        if (!strcmp (doctype, GST_MATROSKA_DOCTYPE_WEBM))
+          common->is_webm = TRUE;
       } else {
         GST_WARNING_OBJECT (common, "Input is EBML without doctype, assuming "
             "matroska (version %d)", version);

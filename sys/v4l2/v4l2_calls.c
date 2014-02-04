@@ -205,8 +205,12 @@ gst_v4l2_fill_lists (GstV4l2Object * v4l2object)
     standard.index = n;
 
     if (v4l2_ioctl (v4l2object->video_fd, VIDIOC_ENUMSTD, &standard) < 0) {
-      if (errno == EINVAL || errno == ENOTTY || errno == ENODATA)
+      if (errno == EINVAL || errno == ENOTTY)
         break;                  /* end of enumeration */
+#ifdef ENODATA
+      else if (errno == ENODATA)
+        break;                  /* end of enumeration, as of Linux 3.7-rc1 */
+#endif
       else {
         GST_ELEMENT_ERROR (e, RESOURCE, SETTINGS,
             (_("Failed to query norm on device '%s'."),
@@ -470,6 +474,44 @@ gst_v4l2_empty_lists (GstV4l2Object * v4l2object)
   g_datalist_clear (&v4l2object->controls);
 }
 
+static void
+gst_v4l2_adjust_buf_type (GstV4l2Object * v4l2object)
+{
+  /* when calling gst_v4l2_object_new the user decides the initial type
+   * so adjust it if multi-planar is supported
+   * the driver should make it exclusive. So the driver should
+   * not support both MPLANE and non-PLANE.
+   * Because even when using MPLANE it still possibles to use it
+   * in a contiguous manner. In this case the first v4l2 plane
+   * contains all the gst planes.
+   */
+#ifdef V4L2_CAP_VIDEO_M2M_MPLANE
+#define CHECK_CAPS (V4L2_CAP_VIDEO_OUTPUT_MPLANE | V4L2_CAP_VIDEO_M2M_MPLANE)
+#else
+#define CHECK_CAPS (V4L2_CAP_VIDEO_OUTPUT_MPLANE)
+#endif
+
+  switch (v4l2object->type) {
+    case V4L2_BUF_TYPE_VIDEO_OUTPUT:
+      if (v4l2object->vcap.capabilities & CHECK_CAPS) {
+        GST_DEBUG ("adjust type to multi-planar output");
+        v4l2object->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+      }
+      break;
+    case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+      if (v4l2object->vcap.capabilities & CHECK_CAPS) {
+        /* FIXME: for now it's an untested case so just put a warning */
+        GST_WARNING ("untested V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE");
+
+        GST_DEBUG ("adjust type to multi-planar capture");
+        v4l2object->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
 /******************************************************
  * gst_v4l2_open():
  *   open the video device (v4l2object->videodev)
@@ -534,33 +576,8 @@ gst_v4l2_open (GstV4l2Object * v4l2object)
               V4L2_CAP_VIDEO_OUTPUT_MPLANE)))
     goto not_output;
 
-  /* when calling gst_v4l2_object_new the user decides the initial type
-   * so adjust it if multi-planar is supported
-   * the driver should make it exclusive. So the driver should
-   * not support both MPLANE and non-PLANE.
-   * Because even when using MPLANE it still possibles to use it
-   * in a contiguous manner. In this case the first v4l2 plane
-   * contains all the gst planes.
-   */
-  switch (v4l2object->type) {
-    case V4L2_BUF_TYPE_VIDEO_OUTPUT:
-      if (v4l2object->vcap.capabilities & V4L2_CAP_VIDEO_OUTPUT_MPLANE) {
-        GST_DEBUG ("adjust type to multi-planar output");
-        v4l2object->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-      }
-      break;
-    case V4L2_BUF_TYPE_VIDEO_CAPTURE:
-      if (v4l2object->vcap.capabilities & V4L2_CAP_VIDEO_CAPTURE_MPLANE) {
-        /* FIXME: for now it's an untested case so just put a warning */
-        GST_WARNING ("untested V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE");
 
-        GST_DEBUG ("adjust type to multi-planar capture");
-        v4l2object->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-      }
-      break;
-    default:
-      break;
-  }
+  gst_v4l2_adjust_buf_type (v4l2object);
 
   /* create enumerations, posts errors. */
   if (!gst_v4l2_fill_lists (v4l2object))
@@ -580,6 +597,13 @@ gst_v4l2_open (GstV4l2Object * v4l2object)
 
   if (v4l2object->extra_controls)
     gst_v4l2_set_controls (v4l2object, v4l2object->extra_controls);
+
+  /* UVC devices are never interlaced, and doing VIDIOC_TRY_FMT on them
+   * causes expensive and slow USB IO, so don't probe them for interlaced
+   */
+  if (!strcmp ((char *) v4l2object->vcap.driver, "uvcusb")) {
+    v4l2object->never_interlaced = TRUE;
+  }
 
   return TRUE;
 
@@ -630,6 +654,56 @@ error:
     }
     /* empty lists */
     gst_v4l2_empty_lists (v4l2object);
+
+    return FALSE;
+  }
+}
+
+gboolean
+gst_v4l2_dup (GstV4l2Object * v4l2object, GstV4l2Object * other)
+{
+  GstPollFD pollfd = GST_POLL_FD_INIT;
+
+  GST_DEBUG_OBJECT (v4l2object->element, "Trying to dup device %s",
+      other->videodev);
+
+  GST_V4L2_CHECK_OPEN (other);
+  GST_V4L2_CHECK_NOT_OPEN (v4l2object);
+  GST_V4L2_CHECK_NOT_ACTIVE (other);
+  GST_V4L2_CHECK_NOT_ACTIVE (v4l2object);
+
+  v4l2object->vcap = other->vcap;
+  gst_v4l2_adjust_buf_type (v4l2object);
+
+  v4l2object->video_fd = v4l2_dup (other->video_fd);
+  if (!GST_V4L2_IS_OPEN (v4l2object))
+    goto not_open;
+
+  g_free (v4l2object->videodev);
+  v4l2object->videodev = g_strdup (other->videodev);
+
+  GST_INFO_OBJECT (v4l2object->element,
+      "Cloned device '%s' (%s) successfully",
+      v4l2object->vcap.card, v4l2object->videodev);
+
+  pollfd.fd = v4l2object->video_fd;
+  gst_poll_add_fd (v4l2object->poll, &pollfd);
+  if (v4l2object->type == V4L2_BUF_TYPE_VIDEO_CAPTURE
+      || v4l2object->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+    gst_poll_fd_ctl_read (v4l2object->poll, &pollfd, TRUE);
+  else
+    gst_poll_fd_ctl_write (v4l2object->poll, &pollfd, TRUE);
+
+  v4l2object->never_interlaced = other->never_interlaced;
+  v4l2object->can_poll_device = TRUE;
+
+  return TRUE;
+
+not_open:
+  {
+    GST_ELEMENT_ERROR (v4l2object->element, RESOURCE, OPEN_READ_WRITE,
+        (_("Could not dup device '%s' for reading and writing."),
+            v4l2object->videodev), GST_ERROR_SYSTEM);
 
     return FALSE;
   }

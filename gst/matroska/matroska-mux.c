@@ -103,6 +103,8 @@ static GstStaticPadTemplate videosink_templ =
         COMMON_VIDEO_CAPS "; "
         "video/x-h264, stream-format=avc, alignment=au, "
         COMMON_VIDEO_CAPS "; "
+        "video/x-h265, stream-format=hvc1, alignment=au, "
+        COMMON_VIDEO_CAPS "; "
         "video/x-divx, "
         COMMON_VIDEO_CAPS "; "
         "video/x-huffyuv, "
@@ -178,8 +180,10 @@ static GstStaticPadTemplate audiosink_templ =
         "channels = (int) {1, 2}, " "rate = (int) [ 8000, 192000 ]; "
         "audio/x-adpcm, "
         "layout = (string)dvi, "
-        "block_align = (int)[64, 8096], "
-        "channels = (int) { 1, 2 }, " "rate = (int) [ 8000, 96000 ]; ")
+        "block_align = (int)[64, 8192], "
+        "channels = (int) { 1, 2 }, " "rate = (int) [ 8000, 96000 ]; "
+        "audio/x-adpcm, "
+        "layout = (string)g726, " "channels = (int)1," "rate = (int)8000; ")
     );
 
 static GstStaticPadTemplate subtitlesink_templ =
@@ -191,9 +195,6 @@ static GstStaticPadTemplate subtitlesink_templ =
         "application/x-usf; subpicture/x-dvd; "
         "application/x-subtitle-unknown")
     );
-
-static GArray *used_uids;
-G_LOCK_DEFINE_STATIC (used_uids);
 
 static gpointer parent_class;   /* NULL */
 
@@ -229,7 +230,7 @@ static void gst_matroska_mux_get_property (GObject * object,
 static void gst_matroska_mux_reset (GstElement * element);
 
 /* uid generation */
-static guint64 gst_matroska_mux_create_uid ();
+static guint64 gst_matroska_mux_create_uid (GstMatroskaMux * mux);
 
 static gboolean theora_streamheader_to_codecdata (const GValue * streamheader,
     GstMatroskaTrackContext * context);
@@ -473,6 +474,9 @@ gst_matroska_mux_init (GstMatroskaMux * mux, gpointer g_class)
   mux->num_t_streams = 0;
   mux->num_v_streams = 0;
 
+  /* create used uid list */
+  mux->used_uids = g_array_sized_new (FALSE, FALSE, sizeof (guint64), 10);
+
   /* initialize remaining variables */
   gst_matroska_mux_reset (GST_ELEMENT (mux));
 }
@@ -496,41 +500,38 @@ gst_matroska_mux_finalize (GObject * object)
   if (mux->writing_app)
     g_free (mux->writing_app);
 
+  g_array_free (mux->used_uids, TRUE);
+
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
 
 /**
  * gst_matroska_mux_create_uid:
+ * @mux: #GstMatroskaMux to generate UID for.
  *
  * Generate new unused track UID.
  *
  * Returns: New track UID.
  */
 static guint64
-gst_matroska_mux_create_uid (void)
+gst_matroska_mux_create_uid (GstMatroskaMux * mux)
 {
   guint64 uid = 0;
-
-  G_LOCK (used_uids);
-
-  if (!used_uids)
-    used_uids = g_array_sized_new (FALSE, FALSE, sizeof (guint64), 10);
 
   while (!uid) {
     guint i;
 
     uid = (((guint64) g_random_int ()) << 32) | g_random_int ();
-    for (i = 0; i < used_uids->len; i++) {
-      if (g_array_index (used_uids, guint64, i) == uid) {
+    for (i = 0; i < mux->used_uids->len; i++) {
+      if (g_array_index (mux->used_uids, guint64, i) == uid) {
         uid = 0;
         break;
       }
     }
-    g_array_append_val (used_uids, uid);
+    g_array_append_val (mux->used_uids, uid);
   }
 
-  G_UNLOCK (used_uids);
   return uid;
 }
 
@@ -672,6 +673,11 @@ gst_matroska_mux_reset (GstElement * element)
   gst_toc_setter_reset (GST_TOC_SETTER (mux));
 
   mux->chapters_pos = 0;
+
+  /* clear used uids */
+  if (mux->used_uids->len > 0) {
+    g_array_remove_range (mux->used_uids, 0, mux->used_uids->len);
+  }
 }
 
 /**
@@ -1114,6 +1120,16 @@ skip_details:
         GST_MATROSKA_CODEC_ID_VIDEO_MPEG4_AVC);
     gst_matroska_mux_free_codec_priv (context);
     /* Create avcC header */
+    if (codec_buf != NULL) {
+      context->codec_priv_size = gst_buffer_get_size (codec_buf);
+      context->codec_priv = g_malloc0 (context->codec_priv_size);
+      gst_buffer_extract (codec_buf, 0, context->codec_priv, -1);
+    }
+  } else if (!strcmp (mimetype, "video/x-h265")) {
+    gst_matroska_mux_set_codec_id (context,
+        GST_MATROSKA_CODEC_ID_VIDEO_MPEGH_HEVC);
+    gst_matroska_mux_free_codec_priv (context);
+    /* Create hvcC header */
     if (codec_buf != NULL) {
       context->codec_priv_size = gst_buffer_get_size (codec_buf);
       context->codec_priv = g_malloc0 (context->codec_priv_size);
@@ -1929,11 +1945,31 @@ gst_matroska_mux_audio_pad_setcaps (GstPad * pad, GstCaps * caps)
       block_align = channels;
       bitrate = block_align * samplerate;
     } else if (!strcmp (mimetype, "audio/x-adpcm")) {
+      const char *layout;
+
+      layout = gst_structure_get_string (structure, "layout");
+      if (!layout) {
+        GST_WARNING_OBJECT (mux, "Missing layout on adpcm caps");
+        goto refuse_caps;
+      }
+
       if (!gst_structure_get_int (structure, "block_align", &block_align)) {
         GST_WARNING_OBJECT (mux, "Missing block_align on adpcm caps");
         goto refuse_caps;
       }
-      format = GST_RIFF_WAVE_FORMAT_DVI_ADPCM;
+
+      if (!strcmp (layout, "dvi")) {
+        format = GST_RIFF_WAVE_FORMAT_DVI_ADPCM;
+      } else if (!strcmp (layout, "g726")) {
+        format = GST_RIFF_WAVE_FORMAT_ITU_G726_ADPCM;
+        if (!gst_structure_get_int (structure, "bitrate", &bitrate)) {
+          GST_WARNING_OBJECT (mux, "Missing bitrate on adpcm g726 caps");
+          goto refuse_caps;
+        }
+      } else {
+        GST_WARNING_OBJECT (mux, "Unknown layout on adpcm caps");
+        goto refuse_caps;
+      }
 
     }
     g_assert (format != 0);
@@ -2269,7 +2305,7 @@ gst_matroska_mux_track_header (GstMatroskaMux * mux,
   gst_ebml_write_uint (ebml, GST_MATROSKA_ID_TRACKTYPE, context->type);
 
   gst_ebml_write_uint (ebml, GST_MATROSKA_ID_TRACKUID,
-      gst_matroska_mux_create_uid ());
+      gst_matroska_mux_create_uid (mux));
   if (context->default_duration) {
     gst_ebml_write_uint (ebml, GST_MATROSKA_ID_TRACKDEFAULTDURATION,
         context->default_duration);
@@ -2337,23 +2373,8 @@ gst_matroska_mux_track_header (GstMatroskaMux * mux,
       break;
     }
 
-      /* this is what we write for now and must be filled
-       * and remainder void'ed later on */
-#define SUBTITLE_DUMMY_SIZE   (1 + 1 + 14 + 1 + 2 + SUBTITLE_MAX_CODEC_PRIVATE)
-
     case GST_MATROSKA_TRACK_TYPE_SUBTITLE:{
-      gpointer buf;
-
-      context->pos = ebml->pos;
-      /* CodecID is mandatory ... */
-      gst_ebml_write_ascii (ebml, GST_MATROSKA_ID_CODECID, "S_SUB_UNKNOWN");
-      /* reserve space */
-      buf = g_malloc0 (SUBTITLE_MAX_CODEC_PRIVATE);
-      gst_ebml_write_binary (ebml, GST_EBML_ID_VOID, buf,
-          SUBTITLE_MAX_CODEC_PRIVATE);
-      g_free (buf);
-      /* real data has to be written at finish */
-      return;
+      break;
     }
     default:
       /* doesn't need type-specific data */
@@ -2994,12 +3015,8 @@ gst_matroska_mux_finish (GstMatroskaMux * mux)
       collected = g_slist_next (collected)) {
     GstMatroskaPad *collect_pad;
     GstClockTime min_duration;  /* observed minimum duration */
-    GstMatroskaTrackContext *context;
-    gint voidleft = 0, fill = 0;
-    gpointer codec_id;
 
     collect_pad = (GstMatroskaPad *) collected->data;
-    context = collect_pad->track;
 
     GST_DEBUG_OBJECT (mux,
         "Pad %" GST_PTR_FORMAT " start ts %" GST_TIME_FORMAT
@@ -3021,35 +3038,6 @@ gst_matroska_mux_finish (GstMatroskaMux * mux)
     if (GST_CLOCK_TIME_IS_VALID (collect_pad->duration) &&
         duration < collect_pad->duration)
       duration = collect_pad->duration;
-
-    if (context->type != GST_MATROSKA_TRACK_TYPE_SUBTITLE || !context->pos)
-      continue;
-
-  again:
-    /* write subtitle type and possible private data */
-    gst_ebml_write_seek (ebml, context->pos);
-    /* complex way to write ascii to account for extra filling */
-    codec_id = g_malloc0 (strlen (context->codec_id) + 1 + fill);
-    strcpy (codec_id, context->codec_id);
-    gst_ebml_write_binary (ebml, GST_MATROSKA_ID_CODECID,
-        codec_id, strlen (context->codec_id) + 1 + fill);
-    g_free (codec_id);
-    if (context->codec_priv)
-      gst_ebml_write_binary (ebml, GST_MATROSKA_ID_CODECPRIVATE,
-          context->codec_priv, context->codec_priv_size);
-    voidleft = SUBTITLE_DUMMY_SIZE - (ebml->pos - context->pos);
-    /* void'ify; sigh, variable sized length field */
-    if (voidleft == 1) {
-      fill = 1;
-      goto again;
-    } else if (voidleft && voidleft <= 128)
-      gst_ebml_write_buffer_header (ebml, GST_EBML_ID_VOID, voidleft - 2);
-    else if (voidleft >= 130)
-      gst_ebml_write_buffer_header (ebml, GST_EBML_ID_VOID, voidleft - 3);
-    else if (voidleft == 129) {
-      gst_ebml_write_buffer_header (ebml, GST_EBML_ID_VOID, 64);
-      gst_ebml_write_buffer_header (ebml, GST_EBML_ID_VOID, 63);
-    }
   }
 
   /* seek back (optional, but do anyway) */

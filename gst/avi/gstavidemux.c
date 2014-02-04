@@ -53,7 +53,7 @@
 #include "avi-ids.h"
 #include <gst/gst-i18n-plugin.h>
 #include <gst/base/gstadapter.h>
-
+#include <gst/tag/tag.h>
 
 #define DIV_ROUND_UP(s,v) (((s) + ((v)-1)) / (v))
 
@@ -124,6 +124,7 @@ static void gst_avi_demux_get_buffer_info (GstAviDemux * avi,
     GstClockTime * ts_end, guint64 * offset, guint64 * offset_end);
 
 static void gst_avi_demux_parse_idit (GstAviDemux * avi, GstBuffer * buf);
+static void gst_avi_demux_parse_strd (GstAviDemux * avi, GstBuffer * buf);
 
 /* GObject methods */
 
@@ -2197,7 +2198,10 @@ gst_avi_demux_parse_stream (GstAviDemux * avi, GstBuffer * buf)
         if (stream->initdata)
           gst_buffer_unref (stream->initdata);
         stream->initdata = sub;
-        sub = NULL;
+        if (sub != NULL) {
+          gst_avi_demux_parse_strd (avi, sub);
+          sub = NULL;
+        }
         break;
       case GST_RIFF_TAG_strn:
         g_free (stream->name);
@@ -2209,6 +2213,11 @@ gst_avi_demux_parse_stream (GstAviDemux * avi, GstBuffer * buf)
           gst_buffer_unmap (sub, &map);
           gst_buffer_unref (sub);
           sub = NULL;
+
+          if (avi->globaltags == NULL)
+            avi->globaltags = gst_tag_list_new_empty ();
+          gst_tag_list_add (avi->globaltags, GST_TAG_MERGE_REPLACE,
+              GST_TAG_TITLE, stream->name, NULL);
         } else {
           stream->name = g_strdup ("");
         }
@@ -2230,6 +2239,15 @@ gst_avi_demux_parse_stream (GstAviDemux * avi, GstBuffer * buf)
         GST_WARNING_OBJECT (avi,
             "Unknown stream header tag %" GST_FOURCC_FORMAT ", ignoring",
             GST_FOURCC_ARGS (tag));
+        /* Only get buffer for debugging if the memdump is needed  */
+        if (gst_debug_category_get_threshold (GST_CAT_DEFAULT) >= 9) {
+          GstMapInfo map;
+
+          gst_buffer_map (sub, &map, GST_MAP_READ);
+          GST_MEMDUMP_OBJECT (avi, "Unknown stream header tag", map.data,
+              map.size);
+          gst_buffer_unmap (sub, &map);
+        }
         /* fall-through */
       case GST_RIFF_TAG_JUNQ:
       case GST_RIFF_TAG_JUNK:
@@ -2494,6 +2512,14 @@ gst_avi_demux_parse_odml (GstAviDemux * avi, GstBuffer * buf)
         GST_WARNING_OBJECT (avi,
             "Unknown tag %" GST_FOURCC_FORMAT " in ODML header",
             GST_FOURCC_ARGS (tag));
+        /* Only get buffer for debugging if the memdump is needed  */
+        if (gst_debug_category_get_threshold (GST_CAT_DEFAULT) >= 9) {
+          GstMapInfo map;
+
+          gst_buffer_map (sub, &map, GST_MAP_READ);
+          GST_MEMDUMP_OBJECT (avi, "Unknown ODML tag", map.data, map.size);
+          gst_buffer_unmap (sub, &map);
+        }
         /* fall-through */
       case GST_RIFF_TAG_JUNQ:
       case GST_RIFF_TAG_JUNK:
@@ -3355,8 +3381,16 @@ gst_avi_demux_stream_header_push (GstAviDemux * avi)
               goto next;
             default:
               GST_WARNING_OBJECT (avi,
-                  "Unknown off %d tag %" GST_FOURCC_FORMAT " in AVI header",
-                  offset, GST_FOURCC_ARGS (tag));
+                  "Unknown tag %" GST_FOURCC_FORMAT " in AVI header",
+                  GST_FOURCC_ARGS (tag));
+              /* Only get buffer for debugging if the memdump is needed  */
+              if (gst_debug_category_get_threshold (GST_CAT_DEFAULT) >= 9) {
+                GstMapInfo map;
+
+                gst_buffer_map (sub, &map, GST_MAP_READ);
+                GST_MEMDUMP_OBJECT (avi, "Unknown tag", map.data, map.size);
+                gst_buffer_unmap (sub, &map);
+              }
               /* fall-through */
             case GST_RIFF_TAG_JUNQ:
             case GST_RIFF_TAG_JUNK:
@@ -3687,6 +3721,228 @@ non_parsable:
   gst_buffer_unmap (buf, &map);
 }
 
+static void
+parse_tag_value (GstAviDemux * avi, GstTagList * taglist, const gchar * type,
+    guint8 * ptr, guint tsize)
+{
+  static const gchar *env_vars[] = { "GST_AVI_TAG_ENCODING",
+    "GST_RIFF_TAG_ENCODING", "GST_TAG_ENCODING", NULL
+  };
+  GType tag_type;
+  gchar *val;
+
+  tag_type = gst_tag_get_type (type);
+  val = gst_tag_freeform_string_to_utf8 ((gchar *) ptr, tsize, env_vars);
+
+  if (val != NULL) {
+    if (tag_type == G_TYPE_STRING) {
+      gst_tag_list_add (taglist, GST_TAG_MERGE_APPEND, type, val, NULL);
+    } else {
+      GValue tag_val = { 0, };
+
+      g_value_init (&tag_val, tag_type);
+      if (gst_value_deserialize (&tag_val, val)) {
+        gst_tag_list_add_value (taglist, GST_TAG_MERGE_APPEND, type, &tag_val);
+      } else {
+        GST_WARNING_OBJECT (avi, "could not deserialize '%s' into a "
+            "tag %s of type %s", val, type, g_type_name (tag_type));
+      }
+      g_value_unset (&tag_val);
+    }
+    g_free (val);
+  } else {
+    GST_WARNING_OBJECT (avi, "could not extract %s tag", type);
+  }
+}
+
+static void
+gst_avi_demux_parse_strd (GstAviDemux * avi, GstBuffer * buf)
+{
+  GstMapInfo map;
+  guint32 tag;
+
+  gst_buffer_map (buf, &map, GST_MAP_READ);
+  if (map.size > 4) {
+    guint8 *ptr = map.data;
+    gsize left = map.size;
+
+    /* parsing based on
+     * http://www.eden-foundation.org/products/code/film_date_stamp/index.html
+     */
+    tag = GST_READ_UINT32_LE (ptr);
+    if ((tag == GST_MAKE_FOURCC ('A', 'V', 'I', 'F')) && (map.size > 98)) {
+      gsize sub_size;
+
+      ptr += 98;
+      left -= 98;
+      if (!memcmp (ptr, "FUJIFILM", 8)) {
+        GST_MEMDUMP_OBJECT (avi, "fujifim tag", ptr, 48);
+
+        ptr += 10;
+        left -= 10;
+        sub_size = 0;
+        while (ptr[sub_size] && sub_size < left)
+          sub_size++;
+
+        if (avi->globaltags == NULL)
+          avi->globaltags = gst_tag_list_new_empty ();
+
+        gst_tag_list_add (avi->globaltags, GST_TAG_MERGE_APPEND,
+            GST_TAG_DEVICE_MANUFACTURER, "FUJIFILM",
+            GST_TAG_DEVICE_MODEL, ptr, NULL);
+
+        while (ptr[sub_size] == '\0' && sub_size < left)
+          sub_size++;
+
+        ptr += sub_size;
+        left -= sub_size;
+        sub_size = 0;
+        while (ptr[sub_size] && sub_size < left)
+          sub_size++;
+        if (ptr[4] == ':')
+          ptr[4] = '-';
+        if (ptr[7] == ':')
+          ptr[7] = '-';
+
+        parse_tag_value (avi, avi->globaltags, GST_TAG_DATE_TIME, ptr,
+            sub_size);
+      }
+    }
+  }
+  gst_buffer_unmap (buf, &map);
+}
+
+/*
+ * gst_avi_demux_parse_ncdt:
+ * @element: caller element (used for debugging/error).
+ * @buf: input data to be used for parsing, stripped from header.
+ * @taglist: a pointer to a taglist (returned by this function)
+ *           containing information about this stream. May be
+ *           NULL if no supported tags were found.
+ *
+ * Parses Nikon metadata from input data.
+ */
+static void
+gst_avi_demux_parse_ncdt (GstAviDemux * avi, GstBuffer * buf,
+    GstTagList ** _taglist)
+{
+  GstMapInfo info;
+  guint8 *ptr;
+  gsize left;
+  guint tsize;
+  guint32 tag;
+  const gchar *type;
+  GstTagList *taglist;
+
+  g_return_if_fail (_taglist != NULL);
+
+  if (!buf) {
+    *_taglist = NULL;
+    return;
+  }
+  gst_buffer_map (buf, &info, GST_MAP_READ);
+
+  taglist = gst_tag_list_new_empty ();
+
+  ptr = info.data;
+  left = info.size;
+
+  while (left > 8) {
+    tag = GST_READ_UINT32_LE (ptr);
+    tsize = GST_READ_UINT32_LE (ptr + 4);
+
+    GST_MEMDUMP_OBJECT (avi, "tag chunk", ptr, MIN (tsize + 8, left));
+
+    left -= 8;
+    ptr += 8;
+
+    GST_DEBUG_OBJECT (avi, "tag %" GST_FOURCC_FORMAT ", size %u",
+        GST_FOURCC_ARGS (tag), tsize);
+
+    if (tsize > left) {
+      GST_WARNING_OBJECT (avi,
+          "Tagsize %d is larger than available data %" G_GSIZE_FORMAT,
+          tsize, left);
+      tsize = left;
+    }
+
+    /* find out the type of metadata */
+    switch (tag) {
+      case GST_RIFF_LIST_nctg:
+        while (tsize > 4) {
+          guint16 sub_tag = GST_READ_UINT16_LE (ptr);
+          guint16 sub_size = GST_READ_UINT16_LE (ptr + 2);
+
+          tsize -= 4;
+          ptr += 4;
+
+          GST_DEBUG_OBJECT (avi, "sub-tag %u, size %u", sub_tag, sub_size);
+          /* http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/Nikon.html#NCTG
+           * for some reason the sub_tag has a +2 offset
+           */
+          switch (sub_tag) {
+            case 0x03:         /* Make */
+              type = GST_TAG_DEVICE_MANUFACTURER;
+              break;
+            case 0x04:         /* Model */
+              type = GST_TAG_DEVICE_MODEL;
+              break;
+              /* TODO: 0x05: is software version, like V1.0 */
+            case 0x06:         /* Software */
+              type = GST_TAG_ENCODER;
+              break;
+            case 0x13:         /* CreationDate */
+              type = GST_TAG_DATE_TIME;
+              if (ptr[4] == ':')
+                ptr[4] = '-';
+              if (ptr[7] == ':')
+                ptr[7] = '-';
+              break;
+            default:
+              type = NULL;
+              break;
+          }
+          if (type != NULL && ptr[0] != '\0') {
+            GST_DEBUG_OBJECT (avi, "mapped tag %u to tag %s", sub_tag, type);
+
+            parse_tag_value (avi, taglist, type, ptr, sub_size);
+          }
+
+          ptr += sub_size;
+          tsize -= sub_size;
+        }
+        break;
+      default:
+        type = NULL;
+        GST_WARNING_OBJECT (avi,
+            "Unknown ncdt (metadata) tag entry %" GST_FOURCC_FORMAT,
+            GST_FOURCC_ARGS (tag));
+        GST_MEMDUMP_OBJECT (avi, "Unknown ncdt", ptr, tsize);
+        break;
+    }
+
+    if (tsize & 1) {
+      tsize++;
+      if (tsize > left)
+        tsize = left;
+    }
+
+    ptr += tsize;
+    left -= tsize;
+  }
+
+  if (!gst_tag_list_is_empty (taglist)) {
+    GST_INFO_OBJECT (avi, "extracted tags: %" GST_PTR_FORMAT, taglist);
+    *_taglist = taglist;
+  } else {
+    *_taglist = NULL;
+    gst_tag_list_unref (taglist);
+  }
+  gst_buffer_unmap (buf, &info);
+
+  return;
+}
+
 /*
  * Read full AVI headers.
  */
@@ -3795,6 +4051,22 @@ gst_avi_demux_stream_header_pull (GstAviDemux * avi)
             gst_buffer_unref (sub);
             sub = NULL;
             break;
+          case GST_RIFF_LIST_ncdt:
+            gst_buffer_unmap (sub, &map);
+            gst_buffer_resize (sub, 4, -1);
+            gst_avi_demux_parse_ncdt (avi, sub, &tags);
+            if (tags) {
+              if (avi->globaltags) {
+                gst_tag_list_insert (avi->globaltags, tags,
+                    GST_TAG_MERGE_REPLACE);
+              } else {
+                avi->globaltags = tags;
+              }
+            }
+            tags = NULL;
+            gst_buffer_unref (sub);
+            sub = NULL;
+            break;
           default:
             GST_WARNING_OBJECT (avi,
                 "Unknown list %" GST_FOURCC_FORMAT " in AVI header",
@@ -3811,8 +4083,8 @@ gst_avi_demux_stream_header_pull (GstAviDemux * avi)
         goto next;
       default:
         GST_WARNING_OBJECT (avi,
-            "Unknown tag %" GST_FOURCC_FORMAT " in AVI header at off %d",
-            GST_FOURCC_ARGS (tag), offset);
+            "Unknown tag %" GST_FOURCC_FORMAT " in AVI header",
+            GST_FOURCC_ARGS (tag));
         GST_MEMDUMP_OBJECT (avi, "Unknown tag", map.data, map.size);
         /* fall-through */
       case GST_RIFF_TAG_JUNQ:
@@ -3896,6 +4168,40 @@ gst_avi_demux_stream_header_pull (GstAviDemux * avi)
 
             sub = gst_buffer_copy_region (buf, GST_BUFFER_COPY_ALL, 4, -1);
             gst_riff_parse_info (element, sub, &tags);
+            if (tags) {
+              if (avi->globaltags) {
+                gst_tag_list_insert (avi->globaltags, tags,
+                    GST_TAG_MERGE_REPLACE);
+              } else {
+                avi->globaltags = tags;
+              }
+            }
+            tags = NULL;
+            if (sub) {
+              gst_buffer_unref (sub);
+              sub = NULL;
+            }
+            gst_buffer_unref (buf);
+            /* gst_riff_read_chunk() has already advanced avi->offset */
+            break;
+          case GST_RIFF_LIST_ncdt:
+            res =
+                gst_riff_read_chunk (element, avi->sinkpad, &avi->offset, &tag,
+                &buf);
+            if (res != GST_FLOW_OK) {
+              GST_DEBUG_OBJECT (avi, "couldn't read ncdt chunk");
+              goto pull_range_failed;
+            }
+            GST_DEBUG ("got size %" G_GSIZE_FORMAT, gst_buffer_get_size (buf));
+            if (size < 4) {
+              GST_DEBUG ("skipping ncdt LIST prefix");
+              avi->offset += (4 - GST_ROUND_UP_2 (size));
+              gst_buffer_unref (buf);
+              continue;
+            }
+
+            sub = gst_buffer_copy_region (buf, GST_BUFFER_COPY_ALL, 4, -1);
+            gst_avi_demux_parse_ncdt (avi, sub, &tags);
             if (tags) {
               if (avi->globaltags) {
                 gst_tag_list_insert (avi->globaltags, tags,

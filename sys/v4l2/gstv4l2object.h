@@ -69,6 +69,9 @@ typedef struct _GstV4l2Xv GstV4l2Xv;
 
 G_BEGIN_DECLS
 
+#define GST_TYPE_V4L2_IO_MODE (gst_v4l2_io_mode_get_type ())
+GType gst_v4l2_io_mode_get_type (void);
+
 #define GST_V4L2_OBJECT(obj) (GstV4l2Object *)(obj)
 
 typedef enum {
@@ -174,6 +177,13 @@ struct _GstV4l2Object {
   GstV4l2GetInOutFunction  get_in_out_func;
   GstV4l2SetInOutFunction  set_in_out_func;
   GstV4l2UpdateFpsFunction update_fps_func;
+
+  /* Quirks */
+  /* Skips interlacing probes */
+  gboolean never_interlaced;
+  /* Allow to skip reading initial format through G_FMT. Some devices
+   * just fails if you don't call S_FMT first. (ex: M2M decoders) */
+  gboolean no_initial_format;
 };
 
 struct _GstV4l2ObjectClassHelper {
@@ -222,6 +232,7 @@ gboolean     gst_v4l2_object_get_property_helper       (GstV4l2Object *v4l2objec
                                                         GParamSpec * pspec);
 /* open/close */
 gboolean     gst_v4l2_object_open            (GstV4l2Object *v4l2object);
+gboolean     gst_v4l2_object_open_shared     (GstV4l2Object *v4l2object, GstV4l2Object *other);
 gboolean     gst_v4l2_object_close           (GstV4l2Object *v4l2object);
 
 /* probing */
@@ -241,7 +252,9 @@ GValueArray* gst_v4l2_probe_get_values      (GstPropertyProbe * probe, guint pro
 
 GstCaps*      gst_v4l2_object_get_all_caps (void);
 
-GstStructure* gst_v4l2_object_v4l2fourcc_to_structure (guint32 fourcc);
+GstCaps*      gst_v4l2_object_get_raw_caps (void);
+
+GstCaps*      gst_v4l2_object_get_codec_caps (void);
 
 gboolean      gst_v4l2_object_set_format  (GstV4l2Object * v4l2object, GstCaps * caps);
 
@@ -258,6 +271,13 @@ gboolean      gst_v4l2_object_copy        (GstV4l2Object * v4l2object,
 
 GstCaps *     gst_v4l2_object_get_caps    (GstV4l2Object * v4l2object,
                                            GstCaps * filter);
+
+gboolean      gst_v4l2_object_setup_format (GstV4l2Object * v4l2object,
+                                            GstVideoInfo * info,
+                                            GstVideoAlignment * align);
+
+gboolean      gst_v4l2_object_decide_allocation (GstV4l2Object * v4l2object,
+                                                 GstQuery * query);
 
 
 #define GST_IMPLEMENT_V4L2_PROBE_METHODS(Type_Class, interface_as_function)                 \

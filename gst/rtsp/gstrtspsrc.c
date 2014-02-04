@@ -123,6 +123,7 @@ enum
   SIGNAL_HANDLE_REQUEST,
   SIGNAL_ON_SDP,
   SIGNAL_SELECT_STREAM,
+  SIGNAL_NEW_MANAGER,
   LAST_SIGNAL
 };
 
@@ -646,6 +647,20 @@ gst_rtspsrc_class_init (GstRTSPSrcClass * klass)
       (GCallback) default_select_stream, select_stream_accum, NULL,
       g_cclosure_marshal_generic, G_TYPE_BOOLEAN, 2, G_TYPE_UINT,
       GST_TYPE_CAPS);
+  /**
+   * GstRTSPSrc::new-manager:
+   * @rtspsrc: a #GstRTSPSrc
+   * @manager: a #GstElement
+   *
+   * Emited after a new manager (like rtpbin) was created and the default
+   * properties were configured.
+   *
+   * Since: 1.4
+   */
+  gst_rtspsrc_signals[SIGNAL_NEW_MANAGER] =
+      g_signal_new_class_handler ("new-manager", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_FIRST | G_SIGNAL_RUN_CLEANUP, 0, NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 1, GST_TYPE_ELEMENT);
 
   gstelement_class->send_event = gst_rtspsrc_send_event;
   gstelement_class->provide_clock = gst_rtspsrc_provide_clock;
@@ -1258,6 +1273,23 @@ gst_rtspsrc_collect_connections (GstRTSPSrc * src, const GstSDPMessage * sdp,
   }
 }
 
+static const gchar *
+get_aggregate_control (GstRTSPSrc * src)
+{
+  const gchar *base;
+
+  if (src->control)
+    base = src->control;
+  else if (src->content_base)
+    base = src->content_base;
+  else if (src->conninfo.url_str)
+    base = src->conninfo.url_str;
+  else
+    base = "/";
+
+  return base;
+}
+
 static GstRTSPStream *
 gst_rtspsrc_create_stream (GstRTSPSrc * src, GstSDPMessage * sdp, gint idx)
 {
@@ -1351,14 +1383,7 @@ gst_rtspsrc_create_stream (GstRTSPSrc * src, GstSDPMessage * sdp, gint idx)
       if (g_strcmp0 (control_url, "*") == 0)
         control_url = "";
 
-      if (src->control)
-        base = src->control;
-      else if (src->content_base)
-        base = src->content_base;
-      else if (src->conninfo.url_str)
-        base = src->conninfo.url_str;
-      else
-        base = "/";
+      base = get_aggregate_control (src);
 
       /* check if the base ends or control starts with / */
       has_slash = g_str_has_prefix (control_url, "/");
@@ -2774,7 +2799,7 @@ gst_rtspsrc_stream_configure_manager (GstRTSPSrc * src, GstRTSPStream * stream,
 
       set_manager_buffer_mode (src);
 
-      /* connect to signals if we did not already do so */
+      /* connect to signals */
       GST_DEBUG_OBJECT (src, "connect to signals on session manager, stream %p",
           stream);
       src->manager_sig_id =
@@ -2786,6 +2811,9 @@ gst_rtspsrc_stream_configure_manager (GstRTSPSrc * src, GstRTSPStream * stream,
 
       g_signal_connect (src->manager, "on-npt-stop", (GCallback) on_npt_stop,
           src);
+
+      g_signal_emit (src, gst_rtspsrc_signals[SIGNAL_NEW_MANAGER], 0,
+          src->manager);
     }
 
     /* we stream directly to the manager, get some pads. Each RTSP stream goes
@@ -3361,7 +3389,7 @@ gst_rtspsrc_stream_configure_transport (GstRTSPStream * stream,
   GstPadTemplate *template;
   gchar *name;
   GstStructure *s;
-  const gchar *mime;
+  const gchar *media_type;
 
   src = stream->parent;
 
@@ -3369,15 +3397,15 @@ gst_rtspsrc_stream_configure_transport (GstRTSPStream * stream,
 
   s = gst_caps_get_structure (stream->caps, 0);
 
-  /* get the proper mime type for this stream now */
-  if (gst_rtsp_transport_get_mime (transport->trans, &mime) < 0)
+  /* get the proper media type for this stream now */
+  if (gst_rtsp_transport_get_media_type (transport, &media_type) < 0)
     goto unknown_transport;
-  if (!mime)
+  if (!media_type)
     goto unknown_transport;
 
-  /* configure the final mime type */
-  GST_DEBUG_OBJECT (src, "setting mime to %s", mime);
-  gst_structure_set_name (s, mime);
+  /* configure the final media type */
+  GST_DEBUG_OBJECT (src, "setting media type to %s", media_type);
+  gst_structure_set_name (s, media_type);
 
   /* try to get and configure a manager, channelpad[0-1] will be configured with
    * the pads for the manager, or NULL when no manager is needed. */
@@ -3847,7 +3875,7 @@ gst_rtspsrc_send_keep_alive (GstRTSPSrc * src)
   GstRTSPMessage request = { 0 };
   GstRTSPResult res;
   GstRTSPMethod method;
-  gchar *control;
+  const gchar *control;
 
   if (src->do_rtsp_keep_alive == FALSE) {
     GST_DEBUG_OBJECT (src, "do-rtsp-keep-alive is FALSE, not sending.");
@@ -3863,11 +3891,7 @@ gst_rtspsrc_send_keep_alive (GstRTSPSrc * src)
   else
     method = GST_RTSP_OPTIONS;
 
-  if (src->control)
-    control = src->control;
-  else
-    control = src->conninfo.url_str;
-
+  control = get_aggregate_control (src);
   if (control == NULL)
     goto no_control;
 
@@ -6298,7 +6322,7 @@ gst_rtspsrc_close (GstRTSPSrc * src, gboolean async, gboolean only_close)
   GstRTSPMessage response = { 0 };
   GstRTSPResult res = GST_RTSP_OK;
   GList *walk;
-  gchar *control;
+  const gchar *control;
 
   GST_DEBUG_OBJECT (src, "TEARDOWN...");
 
@@ -6313,17 +6337,14 @@ gst_rtspsrc_close (GstRTSPSrc * src, gboolean async, gboolean only_close)
     goto close;
 
   /* construct a control url */
-  if (src->control)
-    control = src->control;
-  else
-    control = src->conninfo.url_str;
+  control = get_aggregate_control (src);
 
   if (!(src->methods & (GST_RTSP_PLAY | GST_RTSP_TEARDOWN)))
     goto not_supported;
 
   for (walk = src->streams; walk; walk = g_list_next (walk)) {
     GstRTSPStream *stream = (GstRTSPStream *) walk->data;
-    gchar *setup_url;
+    const gchar *setup_url;
     GstRTSPConnInfo *info;
 
     /* try aggregate control first but do non-aggregate control otherwise */
@@ -6603,7 +6624,7 @@ gst_rtspsrc_play (GstRTSPSrc * src, GstSegment * segment, gboolean async)
   GList *walk;
   gchar *hval;
   gint hval_idx;
-  gchar *control;
+  const gchar *control;
 
   GST_DEBUG_OBJECT (src, "PLAY...");
 
@@ -6630,14 +6651,11 @@ gst_rtspsrc_play (GstRTSPSrc * src, GstSegment * segment, gboolean async)
   gst_rtspsrc_set_state (src, GST_STATE_PLAYING);
 
   /* construct a control url */
-  if (src->control)
-    control = src->control;
-  else
-    control = src->conninfo.url_str;
+  control = get_aggregate_control (src);
 
   for (walk = src->streams; walk; walk = g_list_next (walk)) {
     GstRTSPStream *stream = (GstRTSPStream *) walk->data;
-    gchar *setup_url;
+    const gchar *setup_url;
     GstRTSPConnection *conn;
 
     /* try aggregate control first but do non-aggregate control otherwise */
@@ -6821,7 +6839,7 @@ gst_rtspsrc_pause (GstRTSPSrc * src, gboolean async)
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
   GList *walk;
-  gchar *control;
+  const gchar *control;
 
   GST_DEBUG_OBJECT (src, "PAUSE...");
 
@@ -6838,17 +6856,14 @@ gst_rtspsrc_pause (GstRTSPSrc * src, gboolean async)
     goto no_connection;
 
   /* construct a control url */
-  if (src->control)
-    control = src->control;
-  else
-    control = src->conninfo.url_str;
+  control = get_aggregate_control (src);
 
   /* loop over the streams. We might exit the loop early when we could do an
    * aggregate control */
   for (walk = src->streams; walk; walk = g_list_next (walk)) {
     GstRTSPStream *stream = (GstRTSPStream *) walk->data;
     GstRTSPConnection *conn;
-    gchar *setup_url;
+    const gchar *setup_url;
 
     /* try aggregate control first but do non-aggregate control otherwise */
     if (control)
