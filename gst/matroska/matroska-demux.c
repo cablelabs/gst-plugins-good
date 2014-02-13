@@ -1174,11 +1174,32 @@ gst_matroska_demux_add_stream (GstMatroskaDemux * demux, GstEbmlRead * ebml)
     context->language = g_strdup ("eng");
   }
 
+  if (!list)
+    list = gst_tag_list_new_empty ();
+
+  /* http://www.webmproject.org/docs/container/#storing-webvtt-data-in-a-webm-track
+   * Per the convention (see the Matroska Codec Specifications) used for
+   * flavors of a particular video or audio codec, the CodecID for a WebVTT
+   * track is “D_WEBVTT/kind“, where kind is one of SUBTITLES, CAPTIONS,
+   * DESCRIPTIONS, or METADATA. */
+  if (g_str_has_prefix (context->codec_id, "D_WEBVTT/")) {
+    const gchar *suffix = context->codec_id + strlen ("D_WEBVTT/");
+    const gchar *allowed_suffixes[] = { "SUBTITLES", "CAPTIONS",
+      "DESCRIPTIONS", "METADATA"
+    };
+    for (size_t i = 0; i < 4; ++i) {
+      if (!strcmp (suffix, allowed_suffixes[i])) {
+        gchar *kind = g_ascii_strdown (suffix, -1);
+        gst_tag_list_add (list, GST_TAG_MERGE_REPLACE, GST_TAG_TRACK_KIND,
+            kind, NULL);
+        g_free (kind);
+        break;
+      }
+    }
+  }
+
   if (context->language) {
     const gchar *lang;
-
-    if (!list)
-      list = gst_tag_list_new_empty ();
 
     /* Matroska contains ISO 639-2B codes, we want ISO 639-1 */
     lang = gst_tag_get_language_code (context->language);
