@@ -114,10 +114,16 @@ struct _GstQTDemux {
   /* configured playback region */
   GstSegment segment;
   GstEvent *pending_newsegment;
-  gboolean upstream_newsegment;
+  gboolean upstream_newsegment; /* qtdemux received upstream
+                                 * newsegment in TIME format which likely
+                                 * means that upstream is driving the pipeline
+                                 * (adaptive demuxers) */
   gint64 seek_offset;
   gint64 push_seek_start;
   gint64 push_seek_stop;
+  guint64 segment_base; /* The offset from which playback was started, needs to
+                         * be subtracted from GstSegment.base to get a correct
+                         * running time whenever a new QtSegment is activated */
 
 #if 0
   /* gst index support */
@@ -132,13 +138,13 @@ struct _GstQTDemux {
    * upstream provides it at the caps */
   GstCaps *media_caps;
   gboolean exposed;
-  gboolean mss_mode; /* flag to indicate that we're working with a smoothstreaming fragment */
+  gboolean mss_mode; /* flag to indicate that we're working with a smoothstreaming fragment
+                      * Mss doesn't have 'moov' or any information about the streams format,
+                      * requiring qtdemux to expose and create the streams */
   guint64 fragment_start;
   guint64 fragment_start_offset;
     
   gint64 chapters_track_id;
-
-  GstClockTime min_elst_offset;
 };
 
 struct _GstQTDemuxClass {

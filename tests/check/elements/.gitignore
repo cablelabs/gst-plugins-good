@@ -47,12 +47,14 @@ rganalysis
 rglimiter
 rgvolume
 rtp-payloading
+rtpaux
 rtpbin
 rtpbin_buffer_list
 rtpcollision
 rtpjitterbuffer
 rtpsession
 rtpmux
+rtprtx
 shapewipe
 souphttpsrc
 spectrum

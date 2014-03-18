@@ -24,30 +24,7 @@
 #ifndef __GST_V4L2_OBJECT_H__
 #define __GST_V4L2_OBJECT_H__
 
-/* Because of some really cool feature in video4linux1, also known as
- * 'not including sys/types.h and sys/time.h', we had to include it
- * ourselves. In all their intelligence, these people decided to fix
- * this in the next version (video4linux2) in such a cool way that it
- * breaks all compilations of old stuff...
- * The real problem is actually that linux/time.h doesn't use proper
- * macro checks before defining types like struct timeval. The proper
- * fix here is to either fuck the kernel header (which is what we do
- * by defining _LINUX_TIME_H, an innocent little hack) or by fixing it
- * upstream, which I'll consider doing later on. If you get compiler
- * errors here, check your linux/time.h && sys/time.h header setup.
- */
-#include <sys/ioctl.h>
-#include <sys/types.h>
-#ifdef __sun
-#include <sys/videodev2.h>
-#elif defined(__FreeBSD__)
-#include <linux/videodev2.h>
-#else /* linux */
-#include <linux/types.h>
-#define _LINUX_TIME_H
-#define __user
-#include <linux/videodev2.h>
-#endif
+#include "ext/videodev2.h"
 
 #include <gst/gst.h>
 #include <gst/base/gstpushsrc.h>
@@ -68,6 +45,9 @@ typedef struct _GstV4l2Xv GstV4l2Xv;
 #define GST_V4L2_MAX_SIZE (1<<15) /* 2^15 == 32768 */
 
 G_BEGIN_DECLS
+
+#define GST_TYPE_V4L2_IO_MODE (gst_v4l2_io_mode_get_type ())
+GType gst_v4l2_io_mode_get_type (void);
 
 #define GST_V4L2_OBJECT(obj) (GstV4l2Object *)(obj)
 
@@ -134,6 +114,10 @@ struct _GstV4l2Object {
    */
   gboolean prefered_non_contiguous;
 
+  /* This will be set if supported in decide_allocation. It can be used to
+   * calculate the minimum latency of a m2m decoder. */
+  guint32 min_buffers_for_capture;
+
   /* wanted mode */
   GstV4l2IOMode req_mode;
 
@@ -174,6 +158,13 @@ struct _GstV4l2Object {
   GstV4l2GetInOutFunction  get_in_out_func;
   GstV4l2SetInOutFunction  set_in_out_func;
   GstV4l2UpdateFpsFunction update_fps_func;
+
+  /* Quirks */
+  /* Skips interlacing probes */
+  gboolean never_interlaced;
+  /* Allow to skip reading initial format through G_FMT. Some devices
+   * just fails if you don't call S_FMT first. (ex: M2M decoders) */
+  gboolean no_initial_format;
 };
 
 struct _GstV4l2ObjectClassHelper {
@@ -222,6 +213,7 @@ gboolean     gst_v4l2_object_get_property_helper       (GstV4l2Object *v4l2objec
                                                         GParamSpec * pspec);
 /* open/close */
 gboolean     gst_v4l2_object_open            (GstV4l2Object *v4l2object);
+gboolean     gst_v4l2_object_open_shared     (GstV4l2Object *v4l2object, GstV4l2Object *other);
 gboolean     gst_v4l2_object_close           (GstV4l2Object *v4l2object);
 
 /* probing */
@@ -241,7 +233,9 @@ GValueArray* gst_v4l2_probe_get_values      (GstPropertyProbe * probe, guint pro
 
 GstCaps*      gst_v4l2_object_get_all_caps (void);
 
-GstStructure* gst_v4l2_object_v4l2fourcc_to_structure (guint32 fourcc);
+GstCaps*      gst_v4l2_object_get_raw_caps (void);
+
+GstCaps*      gst_v4l2_object_get_codec_caps (void);
 
 gboolean      gst_v4l2_object_set_format  (GstV4l2Object * v4l2object, GstCaps * caps);
 
@@ -258,6 +252,15 @@ gboolean      gst_v4l2_object_copy        (GstV4l2Object * v4l2object,
 
 GstCaps *     gst_v4l2_object_get_caps    (GstV4l2Object * v4l2object,
                                            GstCaps * filter);
+
+gboolean      gst_v4l2_object_setup_format (GstV4l2Object * v4l2object,
+                                            GstVideoInfo * info,
+                                            GstVideoAlignment * align);
+
+gboolean      gst_v4l2_object_decide_allocation (GstV4l2Object * v4l2object,
+                                                 GstQuery * query);
+
+GstStructure * gst_v4l2_object_v4l2fourcc_to_structure (guint32 fourcc);
 
 
 #define GST_IMPLEMENT_V4L2_PROBE_METHODS(Type_Class, interface_as_function)                 \

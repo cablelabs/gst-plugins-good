@@ -503,7 +503,7 @@ do_get (SoupMessage * msg, const char *path)
 
   int buflen = 4096;
 
-  SoupKnownStatusCode status = SOUP_STATUS_OK;
+  SoupStatus status = SOUP_STATUS_OK;
 
   uri = soup_uri_to_string (soup_message_get_uri (msg), FALSE);
   GST_DEBUG ("request: \"%s\"", uri);
@@ -530,7 +530,7 @@ do_get (SoupMessage * msg, const char *path)
     soup_message_headers_append (msg->response_headers, "Location", redir_uri);
     g_free (redir_uri);
   }
-  if (status != (SoupKnownStatusCode) SOUP_STATUS_OK && !send_error_doc)
+  if (status != (SoupStatus) SOUP_STATUS_OK && !send_error_doc)
     goto leave;
 
   if (msg->method == SOUP_METHOD_GET) {
