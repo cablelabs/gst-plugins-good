@@ -2380,7 +2380,7 @@ qtdemux_parse_trex (GstQTDemux * qtdemux, QtDemuxStream * stream,
       trex = qtdemux_tree_get_child_by_type_full (mvex, FOURCC_trex,
           &trex_data);
       while (trex) {
-        guint32 id = 0, dur = 0, size = 0, flags = 0;
+        guint32 id = 0, dur = 0, size = 0, flags = 0, dummy = 0;
 
         /* skip version/flags */
         if (!gst_byte_reader_skip (&trex_data, 4))
@@ -2390,7 +2390,7 @@ qtdemux_parse_trex (GstQTDemux * qtdemux, QtDemuxStream * stream,
         if (id != stream->track_id)
           goto next;
         /* sample description index; ignore */
-        if (!gst_byte_reader_get_uint32_be (&trex_data, &dur))
+        if (!gst_byte_reader_get_uint32_be (&trex_data, &dummy))
           goto next;
         if (!gst_byte_reader_get_uint32_be (&trex_data, &dur))
           goto next;
@@ -2418,7 +2418,7 @@ qtdemux_parse_trex (GstQTDemux * qtdemux, QtDemuxStream * stream,
 
   *ds_duration = stream->def_sample_duration;
   *ds_size = stream->def_sample_size;
-  *ds_size = stream->def_sample_size;
+  *ds_flags = stream->def_sample_flags;
 
   /* even then, above values are better than random ... */
   if (G_UNLIKELY (!stream->parsed_trex)) {
@@ -7362,7 +7362,7 @@ qtdemux_parse_trak (GstQTDemux * qtdemux, GNode * trak)
   GST_LOG_OBJECT (qtdemux, "stsd type len:      %d", len);
 
   if ((fourcc == FOURCC_drms) || (fourcc == FOURCC_drmi) ||
-      ((fourcc & 0xFFFFFF00) == GST_MAKE_FOURCC ('e', 'n', 'c', 0)))
+      ((fourcc & 0x00FFFFFF) == GST_MAKE_FOURCC ('e', 'n', 'c', 0)))
     goto error_encrypted;
 
   if (stream->subtype == FOURCC_vide) {
@@ -9098,6 +9098,7 @@ qtdemux_tag_add_str_full (GstQTDemux * qtdemux, const char *tag,
   guint32 type;
   int offset;
   gboolean ret = TRUE;
+  const gchar *charset = NULL;
 
   data = qtdemux_tree_get_child_by_type (node, FOURCC_data);
   if (data) {
@@ -9119,10 +9120,30 @@ qtdemux_tag_add_str_full (GstQTDemux * qtdemux, const char *tag,
     len = QT_UINT32 (node->data);
     type = QT_UINT32 ((guint8 *) node->data + 4);
     if ((type >> 24) == 0xa9) {
-      /* Type starts with the (C) symbol, so the next 32 bits are
-       * the language code, which we ignore */
+      gint str_len;
+      gint lang_code;
+
+      /* Type starts with the (C) symbol, so the next data is a list
+       * of (string size(16), language code(16), string) */
+
+      str_len = QT_UINT16 ((guint8 *) node->data + 8);
+      lang_code = QT_UINT16 ((guint8 *) node->data + 10);
+
+      /* the string + fourcc + size + 2 16bit fields,
+       * means that there are more tags in this atom */
+      if (len > str_len + 8 + 4) {
+        /* TODO how to represent the same tag in different languages? */
+        GST_WARNING_OBJECT (qtdemux, "Ignoring metadata entry with multiple "
+            "text alternatives, reading only first one");
+      }
+
       offset = 12;
+      len = str_len + 8 + 4;    /* remove trailing strings that we don't use */
       GST_DEBUG_OBJECT (qtdemux, "found international text tag");
+
+      if (lang_code < 0x800) {  /* MAC encoded string */
+        charset = "mac";
+      }
     } else if (len > 14 && qtdemux_is_string_tag_3gp (qtdemux,
             QT_FOURCC ((guint8 *) node->data + 4))) {
       guint32 type = QT_UINT32 ((guint8 *) node->data + 8);
@@ -9144,8 +9165,21 @@ qtdemux_tag_add_str_full (GstQTDemux * qtdemux, const char *tag,
       GST_DEBUG_OBJECT (qtdemux, "found normal text tag");
       ret = FALSE;              /* may have to fallback */
     }
-    s = gst_tag_freeform_string_to_utf8 ((char *) node->data + offset,
-        len - offset, env_vars);
+    if (charset) {
+      GError *err = NULL;
+
+      s = g_convert ((gchar *) node->data + offset, len - offset, "utf8",
+          charset, NULL, NULL, &err);
+      if (err) {
+        GST_DEBUG_OBJECT (qtdemux, "Failed to convert string from charset %s:"
+            " %s(%d): %s", charset, g_quark_to_string (err->domain), err->code,
+            err->message);
+        g_error_free (err);
+      }
+    } else {
+      s = gst_tag_freeform_string_to_utf8 ((char *) node->data + offset,
+          len - offset, env_vars);
+    }
     if (s) {
       GST_DEBUG_OBJECT (qtdemux, "adding tag %s", GST_STR_NULL (s));
       gst_tag_list_add (qtdemux->tag_list, GST_TAG_MERGE_REPLACE, tag, s, NULL);

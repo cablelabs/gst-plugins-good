@@ -325,7 +325,7 @@ rtp_session_class_init (RTPSessionClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_INTERNAL_SSRC,
       g_param_spec_uint ("internal-ssrc", "Internal SSRC",
-          "The internal SSRC used for the session",
+          "The internal SSRC used for the session (deprecated)",
           0, G_MAXUINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_INTERNAL_SOURCE,
@@ -610,6 +610,8 @@ rtp_session_set_property (GObject * object, guint prop_id,
       RTP_SESSION_LOCK (sess);
       sess->suggested_ssrc = g_value_get_uint (value);
       RTP_SESSION_UNLOCK (sess);
+      if (sess->callbacks.reconfigure)
+        sess->callbacks.reconfigure (sess, sess->reconfigure_user_data);
       break;
     case PROP_BANDWIDTH:
       RTP_SESSION_LOCK (sess);
@@ -890,6 +892,10 @@ rtp_session_set_callbacks (RTPSession * sess, RTPSessionCallbacks * callbacks,
   if (callbacks->notify_nack) {
     sess->callbacks.notify_nack = callbacks->notify_nack;
     sess->notify_nack_user_data = user_data;
+  }
+  if (callbacks->reconfigure) {
+    sess->callbacks.reconfigure = callbacks->reconfigure;
+    sess->reconfigure_user_data = user_data;
   }
 }
 
@@ -1628,7 +1634,7 @@ rtp_session_get_source_by_ssrc (RTPSession * sess, guint32 ssrc)
 
   RTP_SESSION_LOCK (sess);
   result = find_source (sess, ssrc);
-  if (result)
+  if (result != NULL)
     g_object_ref (result);
   RTP_SESSION_UNLOCK (sess);
 
@@ -2293,7 +2299,7 @@ rtp_session_process_pli (RTPSession * sess, guint32 sender_ssrc,
     return;
 
   src = find_source (sess, sender_ssrc);
-  if (!src)
+  if (src == NULL)
     return;
 
   rtp_session_request_local_key_unit (sess, src, FALSE, current_time);
@@ -2341,6 +2347,9 @@ rtp_session_process_fir (RTPSession * sess, guint32 sender_ssrc,
     ssrc = GST_READ_UINT32_BE (data);
 
     own = find_source (sess, ssrc);
+    if (own == NULL)
+      continue;
+
     if (own->internal) {
       our_request = TRUE;
       break;
@@ -3808,7 +3817,7 @@ rtp_session_request_key_unit (RTPSession * sess, guint32 ssrc,
 
   RTP_SESSION_LOCK (sess);
   src = find_source (sess, ssrc);
-  if (!src)
+  if (src == NULL)
     goto no_source;
 
   if (fir) {

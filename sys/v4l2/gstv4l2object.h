@@ -24,30 +24,7 @@
 #ifndef __GST_V4L2_OBJECT_H__
 #define __GST_V4L2_OBJECT_H__
 
-/* Because of some really cool feature in video4linux1, also known as
- * 'not including sys/types.h and sys/time.h', we had to include it
- * ourselves. In all their intelligence, these people decided to fix
- * this in the next version (video4linux2) in such a cool way that it
- * breaks all compilations of old stuff...
- * The real problem is actually that linux/time.h doesn't use proper
- * macro checks before defining types like struct timeval. The proper
- * fix here is to either fuck the kernel header (which is what we do
- * by defining _LINUX_TIME_H, an innocent little hack) or by fixing it
- * upstream, which I'll consider doing later on. If you get compiler
- * errors here, check your linux/time.h && sys/time.h header setup.
- */
-#include <sys/ioctl.h>
-#include <sys/types.h>
-#ifdef __sun
-#include <sys/videodev2.h>
-#elif defined(__FreeBSD__)
-#include <linux/videodev2.h>
-#else /* linux */
-#include <linux/types.h>
-#define _LINUX_TIME_H
-#define __user
-#include <linux/videodev2.h>
-#endif
+#include "ext/videodev2.h"
 
 #include <gst/gst.h>
 #include <gst/base/gstpushsrc.h>
@@ -136,6 +113,10 @@ struct _GstV4l2Object {
    * non contiguous mode.
    */
   gboolean prefered_non_contiguous;
+
+  /* This will be set if supported in decide_allocation. It can be used to
+   * calculate the minimum latency of a m2m decoder. */
+  guint32 min_buffers_for_capture;
 
   /* wanted mode */
   GstV4l2IOMode req_mode;
@@ -278,6 +259,8 @@ gboolean      gst_v4l2_object_setup_format (GstV4l2Object * v4l2object,
 
 gboolean      gst_v4l2_object_decide_allocation (GstV4l2Object * v4l2object,
                                                  GstQuery * query);
+
+GstStructure * gst_v4l2_object_v4l2fourcc_to_structure (guint32 fourcc);
 
 
 #define GST_IMPLEMENT_V4L2_PROBE_METHODS(Type_Class, interface_as_function)                 \

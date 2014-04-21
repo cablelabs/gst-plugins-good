@@ -1425,6 +1425,11 @@ gst_deinterlace_get_pattern_lock (GstDeinterlace * self, gboolean * flush_one)
     }
   }
 
+  if (pattern < 0) {
+    GST_WARNING_OBJECT (self, "Failed to select a pattern");
+    return;
+  }
+
   GST_DEBUG_OBJECT (self,
       "Final pattern match result: pa %d, ph %d, l %d, s %d", pattern, phase,
       telecine_patterns[pattern].length, score);
@@ -1867,8 +1872,8 @@ restart:
     if (ret != GST_FLOW_OK)
       goto no_buffer;
 
-    g_return_val_if_fail (self->history_count - 1 -
-        gst_deinterlace_method_get_latency (self->method) >= 0, GST_FLOW_ERROR);
+    g_return_val_if_fail (self->history_count >=
+        gst_deinterlace_method_get_latency (self->method) + 1, GST_FLOW_ERROR);
 
     buf =
         self->field_history[self->history_count - 1 -
@@ -2472,8 +2477,10 @@ gst_deinterlace_setcaps (GstDeinterlace * self, GstPad * pad, GstCaps * caps)
     self->field_duration = 0;
   }
 
-  gst_deinterlace_set_method (self, self->method_id);
-  gst_deinterlace_method_setup (self->method, &self->vinfo);
+  if (!self->passthrough) {
+    gst_deinterlace_set_method (self, self->method_id);
+    gst_deinterlace_method_setup (self->method, &self->vinfo);
+  }
 
   GST_DEBUG_OBJECT (pad, "Sink caps: %" GST_PTR_FORMAT, caps);
   GST_DEBUG_OBJECT (pad, "Src  caps: %" GST_PTR_FORMAT, srccaps);

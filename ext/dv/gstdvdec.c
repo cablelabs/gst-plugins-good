@@ -393,10 +393,9 @@ gst_dvdec_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GstCaps *caps;
 
       gst_event_parse_caps (event, &caps);
-      gst_dvdec_sink_setcaps (dvdec, caps);
+      res = gst_dvdec_sink_setcaps (dvdec, caps);
       gst_event_unref (event);
       event = NULL;
-      res = TRUE;
       break;
     }
 
@@ -422,7 +421,7 @@ gst_dvdec_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   GstBuffer *outbuf;
   GstFlowReturn ret = GST_FLOW_OK;
   guint length;
-  guint64 cstart, cstop;
+  guint64 cstart = GST_CLOCK_TIME_NONE, cstop = GST_CLOCK_TIME_NONE;
   gboolean PAL, wide;
 
   dvdec = GST_DVDEC (parent);
@@ -519,8 +518,15 @@ gst_dvdec_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
   GST_BUFFER_OFFSET (outbuf) = GST_BUFFER_OFFSET (buf);
   GST_BUFFER_OFFSET_END (outbuf) = GST_BUFFER_OFFSET_END (buf);
-  GST_BUFFER_TIMESTAMP (outbuf) = cstart;
-  GST_BUFFER_DURATION (outbuf) = cstop - cstart;
+
+  /* FIXME : Compute values when using non-TIME segments,
+   * but for the moment make sure we at least don't set bogus values
+   */
+  if (GST_CLOCK_TIME_IS_VALID (cstart)) {
+    GST_BUFFER_TIMESTAMP (outbuf) = cstart;
+    if (GST_CLOCK_TIME_IS_VALID (cstop))
+      GST_BUFFER_DURATION (outbuf) = cstop - cstart;
+  }
 
   ret = gst_pad_push (dvdec->srcpad, outbuf);
 

@@ -38,6 +38,7 @@ static GMainLoop *main_loop;
     "media = (string)audio, "           \
     "payload = (int) 0, "               \
     "clock-rate = (int) 8000, "         \
+    "ssrc = (uint) 42, "                \
     "encoding-name = (string)PCMU"
 
 #define RTP_FRAME_SIZE 20
@@ -784,6 +785,7 @@ rtprtxreceive_srcpad_probe_multiple (GstPad * pad, GstPadProbeInfo * info,
           GUINT_TO_POINTER (ssrc), GUINT_TO_POINTER (seqnum));
       g_hash_table_insert (rtxdata->ssrc_to_nb_packets_map,
           GUINT_TO_POINTER (ssrc), GUINT_TO_POINTER (1));
+      gst_rtp_buffer_unmap (&rtp);
       return GST_PAD_PROBE_OK;
     }
 
@@ -1495,7 +1497,7 @@ rtprtx_suite (void)
   Suite *s = suite_create ("rtprtx");
   TCase *tc_chain = tcase_create ("general");
 
-  tcase_set_timeout (tc_chain, 10);
+  tcase_set_timeout (tc_chain, 120);
 
   suite_add_tcase (s, tc_chain);
 

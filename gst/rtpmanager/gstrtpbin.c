@@ -2684,6 +2684,17 @@ manage_failed:
   }
 }
 
+static gboolean
+copy_sticky_events (GstPad * pad, GstEvent ** event, gpointer user_data)
+{
+  GstPad *gpad = GST_PAD_CAST (user_data);
+
+  GST_DEBUG_OBJECT (gpad, "store sticky event %" GST_PTR_FORMAT, *event);
+  gst_pad_store_sticky_event (gpad, *event);
+
+  return TRUE;
+}
+
 /* a new pad (SSRC) was created in @session. This signal is emited from the
  * payload demuxer. */
 static void
@@ -2714,6 +2725,7 @@ new_payload_found (GstElement * element, guint pt, GstPad * pad,
   gst_pad_set_active (gpad, TRUE);
   GST_RTP_BIN_SHUTDOWN_UNLOCK (rtpbin);
 
+  gst_pad_sticky_events_foreach (pad, copy_sticky_events, gpad);
   gst_element_add_pad (GST_ELEMENT_CAST (rtpbin), gpad);
 
   return;
@@ -2894,6 +2906,7 @@ new_ssrc_pad_found (GstElement * element, guint ssrc, GstPad * pad,
     g_free (padname);
 
     gst_pad_set_active (gpad, TRUE);
+    gst_pad_sticky_events_foreach (pad, copy_sticky_events, gpad);
     gst_element_add_pad (GST_ELEMENT_CAST (rtpbin), gpad);
 
     gst_object_unref (pad);
@@ -3357,6 +3370,8 @@ complete_session_src (GstRtpBin * rtpbin, GstRtpBinSession * session)
       gst_ghost_pad_new_from_template (gname, send_rtp_src, templ);
   gst_object_unref (send_rtp_src);
   gst_pad_set_active (session->send_rtp_src_ghost, TRUE);
+  gst_pad_sticky_events_foreach (send_rtp_src, copy_sticky_events,
+      session->send_rtp_src_ghost);
   gst_element_add_pad (GST_ELEMENT_CAST (rtpbin), session->send_rtp_src_ghost);
   g_free (gname);
 

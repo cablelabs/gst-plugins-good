@@ -2,7 +2,7 @@
  * OSX video sink
  * Copyright (C) 2004-6 Zaheer Abbas Merali <zaheerabbas at merali dot org>
  * Copyright (C) 2007,2008,2009 Pioneers of the Inevitable <songbird@songbirdnest.com>
- * 
+ *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
  * License as published by the Free Software Foundation; either
@@ -20,7 +20,7 @@
  *
  * The development of this code was made possible due to the involvement of
  * Pioneers of the Inevitable, the creators of the Songbird Music player.
- * 
+ *
  */
 
 /**
@@ -29,9 +29,9 @@
  * The OSXVideoSink renders video frames to a MacOSX window. The video output
  * must be directed to a window embedded in an existing NSApp.
  *
- * When the NSView to be embedded is created an element #GstMessage with a 
- * name of 'have-ns-view' will be created and posted on the bus. 
- * The pointer to the NSView to embed will be in the 'nsview' field of that 
+ * When the NSView to be embedded is created an element #GstMessage with a
+ * name of 'have-ns-view' will be created and posted on the bus.
+ * The pointer to the NSView to embed will be in the 'nsview' field of that
  * message. The application MUST handle this message and embed the view
  * appropriately.
  */
@@ -375,6 +375,9 @@ gst_osx_video_sink_setcaps (GstBaseSink * bsink, GstCaps * caps)
 
   gst_osx_video_sink_osxwindow_resize (osxvideosink, osxvideosink->osxwindow,
       video_width, video_height);
+
+  gst_video_info_from_caps (&osxvideosink->info, caps);
+
   result = TRUE;
 
 beach:
@@ -391,7 +394,7 @@ gst_osx_video_sink_change_state (GstElement * element,
 
   osxvideosink = GST_OSX_VIDEO_SINK (element);
 
-  GST_DEBUG_OBJECT (osxvideosink, "%s => %s", 
+  GST_DEBUG_OBJECT (osxvideosink, "%s => %s",
         gst_element_state_get_name(GST_STATE_TRANSITION_CURRENT (transition)),
         gst_element_state_get_name(GST_STATE_TRANSITION_NEXT (transition)));
 
@@ -511,6 +514,14 @@ gst_osx_video_sink_get_property (GObject * object, guint prop_id,
   }
 }
 
+static gboolean
+gst_osx_video_sink_propose_allocation (GstBaseSink * base_sink, GstQuery * query)
+{
+    gst_query_add_allocation_meta (query,
+        GST_VIDEO_META_API_TYPE, NULL);
+
+    return TRUE;
+}
 
 static void
 gst_osx_video_sink_init (GstOSXVideoSink * sink)
@@ -572,6 +583,7 @@ gst_osx_video_sink_class_init (GstOSXVideoSinkClass * klass)
   gstbasesink_class->set_caps = gst_osx_video_sink_setcaps;
   gstbasesink_class->preroll = gst_osx_video_sink_show_frame;
   gstbasesink_class->render = gst_osx_video_sink_show_frame;
+  gstbasesink_class->propose_allocation = gst_osx_video_sink_propose_allocation;
   gstelement_class->change_state = gst_osx_video_sink_change_state;
 
   /**
@@ -777,7 +789,6 @@ gst_osx_video_sink_get_type (void)
 -(void) createInternalWindow
 {
   GstOSXWindow *osxwindow = osxvideosink->osxwindow;
-  ProcessSerialNumber psn;
   NSRect rect;
   unsigned int mask;
 
@@ -794,12 +805,6 @@ gst_osx_video_sink_get_type (void)
   rect.size.width = (float) osxwindow->width;
   rect.size.height = (float) osxwindow->height;
 
-
-  if (!GetCurrentProcess(&psn)) {
-      TransformProcessType(&psn, kProcessTransformToForegroundApplication);
-      SetFrontProcess(&psn);
-  }
-
   osxwindow->win =[[[GstOSXVideoSinkWindow alloc]
                        initWithContentNSRect: rect
                        styleMask: mask
@@ -807,7 +812,7 @@ gst_osx_video_sink_get_type (void)
                        defer: NO
                        screen: nil] retain];
   GST_DEBUG("VideoSinkWindow created, %p", osxwindow->win);
-  [osxwindow->win makeKeyAndOrderFront:NSApp];
+  [osxwindow->win orderFrontRegardless];
   osxwindow->gstview =[osxwindow->win gstView];
   [osxwindow->win setDelegate:[[GstWindowDelegate alloc]
       initWithSink:osxvideosink]];
@@ -873,8 +878,7 @@ gst_osx_video_sink_get_type (void)
 
 - (void) showFrame: (GstBufferObject *) object
 {
-  GstMapInfo info;
-  GstVideoMeta *vmeta;
+  GstVideoFrame frame;
   guint8 *data, *readp, *writep;
   gint i, active_width, stride;
   guint8 *texture_buffer;
@@ -884,14 +888,16 @@ gst_osx_video_sink_get_type (void)
   GST_OBJECT_LOCK (osxvideosink);
   if (osxvideosink->osxwindow == NULL)
       goto no_window;
-  
+
   texture_buffer = (guint8 *) [osxvideosink->osxwindow->gstview getTextureBuffer];
   if (G_UNLIKELY (texture_buffer == NULL))
       goto no_texture_buffer;
-  
-  vmeta = (GstVideoMeta *) gst_buffer_get_meta (buf, GST_VIDEO_META_API_TYPE);
-  gst_video_meta_map (vmeta, 0, &info, (gpointer *) &data, &stride, GST_MAP_READ);
-  readp = data;
+
+  if (!gst_video_frame_map (&frame, &osxvideosink->info, buf, GST_MAP_READ))
+      goto no_map;
+
+  data = readp = GST_VIDEO_FRAME_PLANE_DATA (&frame, 0);
+  stride = GST_VIDEO_FRAME_PLANE_STRIDE (&frame, 0);
   writep = texture_buffer;
   active_width = GST_VIDEO_SINK_WIDTH (osxvideosink) * sizeof (short);
   for (i = 0; i < GST_VIDEO_SINK_HEIGHT (osxvideosink); i++) {
@@ -901,7 +907,7 @@ gst_osx_video_sink_get_type (void)
   }
   [osxvideosink->osxwindow->gstview displayTexture];
 
-  gst_video_meta_unmap (vmeta, 0, &info);
+  gst_video_frame_unmap (&frame);
 
 out:
   GST_OBJECT_UNLOCK (osxvideosink);
@@ -909,6 +915,10 @@ out:
 
   [pool release];
   return;
+
+no_map:
+  GST_WARNING_OBJECT (osxvideosink, "couldn't map frame");
+  goto out;
 
 no_window:
   GST_WARNING_OBJECT (osxvideosink, "not showing frame since we have no window (!?)");
@@ -1006,7 +1016,7 @@ plugin_init (GstPlugin * plugin)
 {
 
   if (!gst_element_register (plugin, "osxvideosink",
-          GST_RANK_PRIMARY, GST_TYPE_OSX_VIDEO_SINK))
+          GST_RANK_MARGINAL, GST_TYPE_OSX_VIDEO_SINK))
     return FALSE;
 
   GST_DEBUG_CATEGORY_INIT (gst_debug_osx_video_sink, "osxvideosink", 0,

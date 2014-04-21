@@ -38,41 +38,11 @@
 
 #include "v4l2_calls.h"
 #include "gstv4l2tuner.h"
-#ifdef HAVE_XVIDEO
-#include "gstv4l2videooverlay.h"
-#endif
 #include "gstv4l2colorbalance.h"
 
 #include "gst/gst-i18n-plugin.h"
 
 #include <gst/video/video.h>
-
-/* videodev2.h is not versioned and we can't easily check for the presence
- * of enum values at compile time, but the V4L2_CAP_VIDEO_OUTPUT_OVERLAY define
- * was added in the same commit as V4L2_FIELD_INTERLACED_{TB,BT} (b2787845) */
-#ifndef V4L2_CAP_VIDEO_OUTPUT_OVERLAY
-#define V4L2_FIELD_INTERLACED_TB 8
-#define V4L2_FIELD_INTERLACED_BT 9
-#endif
-
-#ifndef V4L2_PIX_FMT_NV12M
-#define V4L2_PIX_FMT_NV12M GST_MAKE_FOURCC ('N', 'M', '1', '2')
-#endif
-#ifndef V4L2_PIX_FMT_NV12MT
-#define V4L2_PIX_FMT_NV12MT GST_MAKE_FOURCC ('T', 'M', '1', '2')
-#endif
-#ifndef V4L2_PIX_FMT_NV21M
-#define V4L2_PIX_FMT_NV21M GST_MAKE_FOURCC ('N', 'M', '2', '1')
-#endif
-#ifndef V4L2_PIX_FMT_MPEG1
-#define V4L2_PIX_FMT_MPEG1 GST_MAKE_FOURCC ('M', 'P', 'G', '1')
-#endif
-#ifndef V4L2_PIX_FMT_MPEG2
-#define V4L2_PIX_FMT_MPEG2 GST_MAKE_FOURCC ('M', 'P', 'G', '2')
-#endif
-#ifndef V4L2_PIX_FMT_MPEG4
-#define V4L2_PIX_FMT_MPEG4 GST_MAKE_FOURCC ('M', 'P', 'G', '4')
-#endif
 
 GST_DEBUG_CATEGORY_EXTERN (v4l2_debug);
 GST_DEBUG_CATEGORY_EXTERN (GST_CAT_PERFORMANCE);
@@ -96,229 +66,6 @@ enum
 
 static GSList *gst_v4l2_object_get_format_list (GstV4l2Object * v4l2object);
 
-#if 0
-G_LOCK_DEFINE_STATIC (probe_lock);
-
-const GList *
-gst_v4l2_probe_get_properties (GstPropertyProbe * probe)
-{
-  GObjectClass *klass = G_OBJECT_GET_CLASS (probe);
-  static GList *list = NULL;
-
-  G_LOCK (probe_lock);
-
-  if (!list) {
-    list = g_list_append (NULL, g_object_class_find_property (klass, "device"));
-  }
-
-  G_UNLOCK (probe_lock);
-
-  return list;
-}
-
-static gboolean init = FALSE;
-static GList *devices = NULL;
-
-#ifdef HAVE_GUDEV
-static gboolean
-gst_v4l2_class_probe_devices_with_udev (GstElementClass * klass, gboolean check,
-    GList ** klass_devices)
-{
-  GUdevClient *client = NULL;
-  GList *item;
-
-  if (!check) {
-    while (devices) {
-      gchar *device = devices->data;
-      devices = g_list_remove (devices, device);
-      g_free (device);
-    }
-
-    GST_INFO ("Enumerating video4linux devices from udev");
-    client = g_udev_client_new (NULL);
-    if (!client) {
-      GST_WARNING ("Failed to initialize gudev client");
-      goto finish;
-    }
-
-    item = g_udev_client_query_by_subsystem (client, "video4linux");
-    while (item) {
-      GUdevDevice *device = item->data;
-      gchar *devnode = g_strdup (g_udev_device_get_device_file (device));
-      gint api = g_udev_device_get_property_as_int (device, "ID_V4L_VERSION");
-      GST_INFO ("Found new device: %s, API: %d", devnode, api);
-      /* Append v4l2 devices only. If api is 0 probably v4l_id has
-         been stripped out of the current udev installation, append
-         anyway */
-      if (api == 0) {
-        GST_WARNING
-            ("Couldn't retrieve ID_V4L_VERSION, silly udev installation?");
-      }
-      if ((api == 2 || api == 0)) {
-        devices = g_list_append (devices, devnode);
-      } else {
-        g_free (devnode);
-      }
-      g_object_unref (device);
-      item = item->next;
-    }
-    g_list_free (item);
-    init = TRUE;
-  }
-
-finish:
-  if (client) {
-    g_object_unref (client);
-  }
-
-  *klass_devices = devices;
-
-  return init;
-}
-#endif /* HAVE_GUDEV */
-
-static gboolean
-gst_v4l2_class_probe_devices (GstElementClass * klass, gboolean check,
-    GList ** klass_devices)
-{
-  if (!check) {
-    const gchar *dev_base[] = { "/dev/video", "/dev/v4l2/video", NULL };
-    gint base, n, fd;
-
-    while (devices) {
-      gchar *device = devices->data;
-      devices = g_list_remove (devices, device);
-      g_free (device);
-    }
-
-    /*
-     * detect /dev entries
-     */
-    for (n = 0; n < 64; n++) {
-      for (base = 0; dev_base[base] != NULL; base++) {
-        struct stat s;
-        gchar *device = g_strdup_printf ("%s%d",
-            dev_base[base],
-            n);
-
-        /*
-         * does the /dev/ entry exist at all?
-         */
-        if (stat (device, &s) == 0) {
-          /*
-           * yes: is a device attached?
-           */
-          if (S_ISCHR (s.st_mode)) {
-
-            if ((fd = open (device, O_RDWR | O_NONBLOCK)) > 0 || errno == EBUSY) {
-              if (fd > 0)
-                close (fd);
-
-              devices = g_list_append (devices, device);
-              break;
-            }
-          }
-        }
-        g_free (device);
-      }
-    }
-    init = TRUE;
-  }
-
-  *klass_devices = devices;
-
-  return init;
-}
-
-void
-gst_v4l2_probe_probe_property (GstPropertyProbe * probe,
-    guint prop_id, const GParamSpec * pspec, GList ** klass_devices)
-{
-  GstElementClass *klass = GST_ELEMENT_GET_CLASS (probe);
-
-  switch (prop_id) {
-    case PROP_DEVICE:
-#ifdef HAVE_GUDEV
-      if (!gst_v4l2_class_probe_devices_with_udev (klass, FALSE, klass_devices))
-        gst_v4l2_class_probe_devices (klass, FALSE, klass_devices);
-#else /* !HAVE_GUDEV */
-      gst_v4l2_class_probe_devices (klass, FALSE, klass_devices);
-#endif /* HAVE_GUDEV */
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (probe, prop_id, pspec);
-      break;
-  }
-}
-
-gboolean
-gst_v4l2_probe_needs_probe (GstPropertyProbe * probe,
-    guint prop_id, const GParamSpec * pspec, GList ** klass_devices)
-{
-  GstElementClass *klass = GST_ELEMENT_GET_CLASS (probe);
-  gboolean ret = FALSE;
-
-  switch (prop_id) {
-    case PROP_DEVICE:
-#ifdef HAVE_GUDEV
-      ret =
-          !gst_v4l2_class_probe_devices_with_udev (klass, FALSE, klass_devices);
-#else /* !HAVE_GUDEV */
-      ret = !gst_v4l2_class_probe_devices (klass, TRUE, klass_devices);
-#endif /* HAVE_GUDEV */
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (probe, prop_id, pspec);
-      break;
-  }
-  return ret;
-}
-
-static GValueArray *
-gst_v4l2_class_list_devices (GstElementClass * klass, GList ** klass_devices)
-{
-  GValueArray *array;
-  GValue value = { 0 };
-  GList *item;
-
-  if (!*klass_devices)
-    return NULL;
-
-  array = g_value_array_new (g_list_length (*klass_devices));
-  item = *klass_devices;
-  g_value_init (&value, G_TYPE_STRING);
-  while (item) {
-    gchar *device = item->data;
-
-    g_value_set_string (&value, device);
-    g_value_array_append (array, &value);
-
-    item = item->next;
-  }
-  g_value_unset (&value);
-
-  return array;
-}
-
-GValueArray *
-gst_v4l2_probe_get_values (GstPropertyProbe * probe,
-    guint prop_id, const GParamSpec * pspec, GList ** klass_devices)
-{
-  GstElementClass *klass = GST_ELEMENT_GET_CLASS (probe);
-  GValueArray *array = NULL;
-
-  switch (prop_id) {
-    case PROP_DEVICE:
-      array = gst_v4l2_class_list_devices (klass, klass_devices);
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (probe, prop_id, pspec);
-      break;
-  }
-
-  return array;
-}
-#endif
 
 #define GST_TYPE_V4L2_DEVICE_FLAGS (gst_v4l2_device_get_type ())
 static GType
@@ -928,10 +675,6 @@ gst_v4l2_object_open (GstV4l2Object * v4l2object)
   else
     return FALSE;
 
-#ifdef HAVE_XVIDEO
-  gst_v4l2_video_overlay_start (v4l2object);
-#endif
-
   return TRUE;
 }
 
@@ -942,20 +685,12 @@ gst_v4l2_object_open_shared (GstV4l2Object * v4l2object, GstV4l2Object * other)
 
   ret = gst_v4l2_dup (v4l2object, other);
 
-#ifdef HAVE_XVIDEO
-  gst_v4l2_video_overlay_start (v4l2object);
-#endif
-
   return ret;
 }
 
 gboolean
 gst_v4l2_object_close (GstV4l2Object * v4l2object)
 {
-#ifdef HAVE_XVIDEO
-  gst_v4l2_video_overlay_stop (v4l2object);
-#endif
-
   if (!gst_v4l2_close (v4l2object))
     return FALSE;
 
@@ -977,6 +712,7 @@ typedef enum
   GST_V4L2_RAW = 1 << 0,
   GST_V4L2_CODEC = 1 << 1,
   GST_V4L2_TRANSPORT = 1 << 2,
+  GST_V4L2_NO_PARSE = 1 << 3,
   GST_V4L2_ALL = 0xffff
 } GstV4L2FormatFlags;
 
@@ -1021,47 +757,29 @@ static const GstV4L2FormatDesc gst_v4l2_formats[] = {
   {V4L2_PIX_FMT_HI240, TRUE, GST_V4L2_RAW},
 
   /* see http://www.siliconimaging.com/RGB%20Bayer.htm */
-#ifdef V4L2_PIX_FMT_SBGGR8
   {V4L2_PIX_FMT_SBGGR8, TRUE, GST_V4L2_CODEC},
-#endif
 
   /* compressed formats */
   {V4L2_PIX_FMT_MJPEG, FALSE, GST_V4L2_CODEC},
   {V4L2_PIX_FMT_JPEG, FALSE, GST_V4L2_CODEC},
-#ifdef V4L2_PIX_FMT_PJPG
   {V4L2_PIX_FMT_PJPG, FALSE, GST_V4L2_CODEC},
-#endif
   {V4L2_PIX_FMT_DV, FALSE, GST_V4L2_TRANSPORT},
   {V4L2_PIX_FMT_MPEG, FALSE, GST_V4L2_TRANSPORT},
   {V4L2_PIX_FMT_MPEG1, FALSE, GST_V4L2_CODEC},
   {V4L2_PIX_FMT_MPEG2, FALSE, GST_V4L2_CODEC},
   {V4L2_PIX_FMT_MPEG4, FALSE, GST_V4L2_CODEC},
 
-#ifdef V4L2_PIX_FMT_H263
   {V4L2_PIX_FMT_H263, FALSE, GST_V4L2_CODEC},
-#endif
-#ifdef V4L2_PIX_FMT_H264
   {V4L2_PIX_FMT_H264, FALSE, GST_V4L2_CODEC},
-#endif
-#ifdef V4L2_PIX_FMT_VP8
-  {V4L2_PIX_FMT_VP8, FALSE, GST_V4L2_CODEC},
-#endif
+  /* VP8 not parseable */
+  {V4L2_PIX_FMT_VP8, FALSE, GST_V4L2_CODEC | GST_V4L2_NO_PARSE},
 
   /*  Vendor-specific formats   */
   {V4L2_PIX_FMT_WNVA, TRUE, GST_V4L2_CODEC},
-
-#ifdef V4L2_PIX_FMT_SN9C10X
   {V4L2_PIX_FMT_SN9C10X, TRUE, GST_V4L2_CODEC},
-#endif
-#ifdef V4L2_PIX_FMT_PWC1
   {V4L2_PIX_FMT_PWC1, TRUE, GST_V4L2_CODEC},
-#endif
-#ifdef V4L2_PIX_FMT_PWC2
   {V4L2_PIX_FMT_PWC2, TRUE, GST_V4L2_CODEC},
-#endif
-#ifdef V4L2_PIX_FMT_YVYU
   {V4L2_PIX_FMT_YVYU, TRUE, GST_V4L2_RAW},
-#endif
 };
 
 #define GST_V4L2_FORMAT_COUNT (G_N_ELEMENTS (gst_v4l2_formats))
@@ -1084,16 +802,10 @@ gst_v4l2_object_get_format_from_fourcc (GstV4l2Object * v4l2object,
       return fmt;
     /* special case for jpeg */
     if (fmt->pixelformat == V4L2_PIX_FMT_MJPEG ||
-        fmt->pixelformat == V4L2_PIX_FMT_JPEG
-#ifdef V4L2_PIX_FMT_PJPG
-        || fmt->pixelformat == V4L2_PIX_FMT_PJPG
-#endif
-        ) {
-      if (fourcc == V4L2_PIX_FMT_JPEG || fourcc == V4L2_PIX_FMT_MJPEG
-#ifdef V4L2_PIX_FMT_PJPG
-          || fourcc == V4L2_PIX_FMT_PJPG
-#endif
-          ) {
+        fmt->pixelformat == V4L2_PIX_FMT_JPEG ||
+        fmt->pixelformat == V4L2_PIX_FMT_PJPG) {
+      if (fourcc == V4L2_PIX_FMT_JPEG || fourcc == V4L2_PIX_FMT_MJPEG ||
+          fourcc == V4L2_PIX_FMT_PJPG) {
         return fmt;
       }
     }
@@ -1119,13 +831,6 @@ gst_v4l2_object_get_format_from_fourcc (GstV4l2Object * v4l2object,
 #define GREY_BASE_RANK       5
 #define PWC_BASE_RANK        1
 
-/* This flag is already used by libv4l2 although
- * it was added to the Linux kernel in 2.6.32
- */
-#ifndef V4L2_FMT_FLAG_EMULATED
-#define V4L2_FMT_FLAG_EMULATED 0x0002
-#endif
-
 static gint
 gst_v4l2_object_format_get_rank (const struct v4l2_fmtdesc *fmt)
 {
@@ -1135,11 +840,9 @@ gst_v4l2_object_format_get_rank (const struct v4l2_fmtdesc *fmt)
 
   switch (fourcc) {
     case V4L2_PIX_FMT_MJPEG:
-#ifdef V4L2_PIX_FMT_PJPG
     case V4L2_PIX_FMT_PJPG:
       rank = JPEG_BASE_RANK;
       break;
-#endif
     case V4L2_PIX_FMT_JPEG:
       rank = JPEG_BASE_RANK + 1;
       break;
@@ -1215,28 +918,20 @@ gst_v4l2_object_format_get_rank (const struct v4l2_fmtdesc *fmt)
       rank = 0;
       break;
 
-#ifdef V4L2_PIX_FMT_SBGGR8
     case V4L2_PIX_FMT_SBGGR8:
       rank = BAYER_BASE_RANK;
       break;
-#endif
 
-#ifdef V4L2_PIX_FMT_SN9C10X
     case V4L2_PIX_FMT_SN9C10X:
       rank = S910_BASE_RANK;
       break;
-#endif
 
-#ifdef V4L2_PIX_FMT_PWC1
     case V4L2_PIX_FMT_PWC1:
       rank = PWC_BASE_RANK;
       break;
-#endif
-#ifdef V4L2_PIX_FMT_PWC2
     case V4L2_PIX_FMT_PWC2:
       rank = PWC_BASE_RANK;
       break;
-#endif
 
     default:
       rank = 0;
@@ -1443,11 +1138,9 @@ gst_v4l2_object_v4l2fourcc_to_video_format (guint32 fourcc)
     case V4L2_PIX_FMT_YUV422P:
       format = GST_VIDEO_FORMAT_Y42B;
       break;
-#ifdef V4L2_PIX_FMT_YVYU
     case V4L2_PIX_FMT_YVYU:
       format = GST_VIDEO_FORMAT_YVYU;
       break;
-#endif
     default:
       format = GST_VIDEO_FORMAT_UNKNOWN;
       g_assert_not_reached ();
@@ -1457,16 +1150,14 @@ gst_v4l2_object_v4l2fourcc_to_video_format (guint32 fourcc)
   return format;
 }
 
-static GstStructure *
+GstStructure *
 gst_v4l2_object_v4l2fourcc_to_structure (guint32 fourcc)
 {
   GstStructure *structure = NULL;
 
   switch (fourcc) {
     case V4L2_PIX_FMT_MJPEG:   /* Motion-JPEG */
-#ifdef V4L2_PIX_FMT_PJPG
     case V4L2_PIX_FMT_PJPG:    /* Progressive-JPEG */
-#endif
     case V4L2_PIX_FMT_JPEG:    /* JFIF JPEG */
       structure = gst_structure_new_empty ("image/jpeg");
       break;
@@ -1487,24 +1178,18 @@ gst_v4l2_object_v4l2fourcc_to_structure (guint32 fourcc)
           "mpegversion", G_TYPE_INT, 4, "systemstream",
           G_TYPE_BOOLEAN, FALSE, NULL);
       break;
-#ifdef V4L2_PIX_FMT_H263
     case V4L2_PIX_FMT_H263:
       structure = gst_structure_new ("video/x-h263",
           "variant", G_TYPE_STRING, "itu", NULL);
       break;
-#endif
-#ifdef V4L2_PIX_FMT_H264
     case V4L2_PIX_FMT_H264:    /* H.264 */
       structure = gst_structure_new ("video/x-h264",
           "stream-format", G_TYPE_STRING, "byte-stream", "alignment",
           G_TYPE_STRING, "au", NULL);
       break;
-#endif
-#ifdef V4L2_PIX_FMT_VP8
     case V4L2_PIX_FMT_VP8:
       structure = gst_structure_new_empty ("video/x-vp8");
       break;
-#endif
     case V4L2_PIX_FMT_RGB332:
     case V4L2_PIX_FMT_RGB555X:
     case V4L2_PIX_FMT_RGB565X:
@@ -1532,9 +1217,7 @@ gst_v4l2_object_v4l2fourcc_to_structure (guint32 fourcc)
     case V4L2_PIX_FMT_Y41P:
 #endif
     case V4L2_PIX_FMT_YUV422P:
-#ifdef V4L2_PIX_FMT_YVYU
     case V4L2_PIX_FMT_YVYU:
-#endif
     case V4L2_PIX_FMT_YUV411P:{
       GstVideoFormat format;
       format = gst_v4l2_object_v4l2fourcc_to_video_format (fourcc);
@@ -1549,30 +1232,23 @@ gst_v4l2_object_v4l2fourcc_to_structure (guint32 fourcc)
           NULL);
       break;
     case V4L2_PIX_FMT_MPEG:    /* MPEG          */
-      structure = gst_structure_new_empty ("video/mpegts");
+      structure = gst_structure_new ("video/mpegts",
+          "systemstream", G_TYPE_BOOLEAN, TRUE, NULL);
       break;
     case V4L2_PIX_FMT_WNVA:    /* Winnov hw compres */
       break;
-#ifdef V4L2_PIX_FMT_SBGGR8
     case V4L2_PIX_FMT_SBGGR8:
       structure = gst_structure_new_empty ("video/x-bayer");
       break;
-#endif
-#ifdef V4L2_PIX_FMT_SN9C10X
     case V4L2_PIX_FMT_SN9C10X:
       structure = gst_structure_new_empty ("video/x-sonix");
       break;
-#endif
-#ifdef V4L2_PIX_FMT_PWC1
     case V4L2_PIX_FMT_PWC1:
       structure = gst_structure_new_empty ("video/x-pwc1");
       break;
-#endif
-#ifdef V4L2_PIX_FMT_PWC2
     case V4L2_PIX_FMT_PWC2:
       structure = gst_structure_new_empty ("video/x-pwc2");
       break;
-#endif
     default:
       GST_DEBUG ("Unknown fourcc 0x%08x %" GST_FOURCC_FORMAT,
           fourcc, GST_FOURCC_ARGS (fourcc));
@@ -1739,11 +1415,9 @@ gst_v4l2_object_get_caps_info (GstV4l2Object * v4l2object, GstCaps * caps,
         gst_v4l2_object_choose_fourcc (v4l2object, V4L2_PIX_FMT_NV21,
             V4L2_PIX_FMT_NV21M, &fourcc, &fourcc_alt);
         break;
-#ifdef V4L2_PIX_FMT_YVYU
       case GST_VIDEO_FORMAT_YVYU:
         fourcc = V4L2_PIX_FMT_YVYU;
         break;
-#endif
       case GST_VIDEO_FORMAT_RGB15:
         fourcc = V4L2_PIX_FMT_RGB555;
         break;
@@ -1793,35 +1467,21 @@ gst_v4l2_object_get_caps_info (GstV4l2Object * v4l2object, GstCaps * caps,
             break;
         }
       }
-#ifdef V4L2_PIX_FMT_H263
     } else if (g_str_equal (mimetype, "video/x-h263")) {
       fourcc = V4L2_PIX_FMT_H263;
-#endif
-#ifdef V4L2_PIX_FMT_H264
     } else if (g_str_equal (mimetype, "video/x-h264")) {
       fourcc = V4L2_PIX_FMT_H264;
-#endif
-#ifdef V4L2_PIX_FMT_VP8
     } else if (g_str_equal (mimetype, "video/x-vp8")) {
       fourcc = V4L2_PIX_FMT_VP8;
-#endif
-#ifdef V4L2_PIX_FMT_SBGGR8
     } else if (g_str_equal (mimetype, "video/x-bayer")) {
       fourcc = V4L2_PIX_FMT_SBGGR8;
-#endif
-#ifdef V4L2_PIX_FMT_SN9C10X
     } else if (g_str_equal (mimetype, "video/x-sonix")) {
       fourcc = V4L2_PIX_FMT_SN9C10X;
-#endif
-#ifdef V4L2_PIX_FMT_PWC1
     } else if (g_str_equal (mimetype, "video/x-pwc1")) {
       fourcc = V4L2_PIX_FMT_PWC1;
-#endif
-#ifdef V4L2_PIX_FMT_PWC2
     } else if (g_str_equal (mimetype, "video/x-pwc2")) {
       fourcc = V4L2_PIX_FMT_PWC2;
     }
-#endif
   }
 
   if (fourcc == 0)
@@ -1905,7 +1565,6 @@ cropcap_failed:
 
 
 /* The frame interval enumeration code first appeared in Linux 2.6.19. */
-#ifdef VIDIOC_ENUM_FRAMEINTERVALS
 static GstStructure *
 gst_v4l2_object_probe_caps_for_format_and_size (GstV4l2Object * v4l2object,
     guint32 pixelformat,
@@ -2120,9 +1779,7 @@ unknown_type:
     return NULL;
   }
 }
-#endif /* defined VIDIOC_ENUM_FRAMEINTERVALS */
 
-#ifdef VIDIOC_ENUM_FRAMESIZES
 static gint
 sort_by_frame_size (GstStructure * s1, GstStructure * s2)
 {
@@ -2136,7 +1793,6 @@ sort_by_frame_size (GstStructure * s1, GstStructure * s2)
   /* I think it's safe to assume that this won't overflow for a while */
   return ((w2 * h2) - (w1 * h1));
 }
-#endif
 
 static void
 gst_v4l2_object_update_and_append (GstV4l2Object * v4l2object,
@@ -2149,7 +1805,8 @@ gst_v4l2_object_update_and_append (GstV4l2Object * v4l2object,
 
     for (; i < GST_V4L2_FORMAT_COUNT; i++) {
       if (format == gst_v4l2_formats[i].format &&
-          gst_v4l2_formats[i].flags == GST_V4L2_CODEC) {
+          gst_v4l2_formats[i].flags & GST_V4L2_CODEC &&
+          !(gst_v4l2_formats[i].flags & GST_V4L2_NO_PARSE)) {
         gst_structure_set (s, "parsed", G_TYPE_BOOLEAN, TRUE, NULL);
         break;
       }
@@ -2165,8 +1822,6 @@ gst_v4l2_object_probe_caps_for_format (GstV4l2Object * v4l2object,
 {
   GstCaps *ret = gst_caps_new_empty ();
   GstStructure *tmp;
-
-#ifdef VIDIOC_ENUM_FRAMESIZES
   gint fd = v4l2object->video_fd;
   struct v4l2_frmsizeenum size;
   GList *results = NULL;
@@ -2315,8 +1970,8 @@ unknown_type:
         ": %u", GST_FOURCC_ARGS (pixelformat), size.type);
     goto default_frame_sizes;
   }
+
 default_frame_sizes:
-#endif /* defined VIDIOC_ENUM_FRAMESIZES */
   {
     gint min_w, max_w, min_h, max_h, fix_num = 0, fix_denom = 0;
     gboolean interlaced;
@@ -2679,17 +2334,6 @@ gst_v4l2_object_set_format (GstV4l2Object * v4l2object, GstCaps * caps)
       "%" GST_FOURCC_FORMAT " stride: %d", width, height,
       GST_FOURCC_ARGS (pixelformat), v4l2object->bytesperline[0]);
 
-  /* MPEG-TS source cameras don't get their format set for some reason.
-   * It looks wrong and we weren't able to track down the reason for that code
-   * so it is disabled until someone who has an mpeg-ts camera complains...
-   */
-#if 0
-  /* Only unconditionally accept mpegts for sources */
-  if ((v4l2object->type == V4L2_BUF_TYPE_VIDEO_CAPTURE) &&
-      (pixelformat == GST_MAKE_FOURCC ('M', 'P', 'E', 'G')))
-    goto done;
-#endif
-
   memset (&format, 0x00, sizeof (struct v4l2_format));
   format.type = v4l2object->type;
 
@@ -2704,6 +2348,12 @@ gst_v4l2_object_set_format (GstV4l2Object * v4l2object, GstCaps * caps)
         format.fmt.pix_mp.width, format.fmt.pix_mp.height,
         GST_FOURCC_ARGS (format.fmt.pix.pixelformat),
         format.fmt.pix_mp.colorspace, format.fmt.pix_mp.num_planes);
+
+    /* If no size in caps, use configured size */
+    if (width == 0 && height == 0) {
+      width = format.fmt.pix_mp.width;
+      height = format.fmt.pix_mp.height;
+    }
 
     if (format.type != v4l2object->type ||
         format.fmt.pix_mp.width != width ||
@@ -2783,6 +2433,12 @@ gst_v4l2_object_set_format (GstV4l2Object * v4l2object, GstCaps * caps)
         format.fmt.pix.width, format.fmt.pix.height,
         GST_FOURCC_ARGS (format.fmt.pix.pixelformat),
         format.fmt.pix.bytesperline, format.fmt.pix.colorspace);
+
+    /* If no size in caps, use configured size */
+    if (width == 0 && height == 0) {
+      width = format.fmt.pix_mp.width;
+      height = format.fmt.pix_mp.height;
+    }
 
     if (format.type != v4l2object->type ||
         format.fmt.pix.width != width ||
@@ -3296,6 +2952,7 @@ gst_v4l2_object_decide_allocation (GstV4l2Object * obj, GstQuery * query)
   if (v4l2_ioctl (obj->video_fd, VIDIOC_G_CTRL, &ctl) >= 0) {
     GST_DEBUG_OBJECT (obj->element, "driver require a minimum of %d buffers",
         ctl.value);
+    obj->min_buffers_for_capture = ctl.value;
     min += ctl.value;
   }
 

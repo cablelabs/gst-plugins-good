@@ -126,7 +126,7 @@ static GstStaticPadTemplate videosink_templ =
         "video/x-vp8, "
         COMMON_VIDEO_CAPS "; "
         "video/x-raw, "
-        "format = (string) { YUY2, I420, YV12, UYVY, AYUV }, "
+        "format = (string) { YUY2, I420, YV12, UYVY, AYUV, GRAY8, BGR, RGB }, "
         COMMON_VIDEO_CAPS "; "
         "video/x-wmv, " "wmvversion = (int) [ 1, 3 ], " COMMON_VIDEO_CAPS)
     );
@@ -160,6 +160,7 @@ static GstStaticPadTemplate audiosink_templ =
         COMMON_AUDIO_CAPS "; "
         "audio/x-flac, "
         COMMON_AUDIO_CAPS "; "
+        "audio/x-opus; "
         "audio/x-speex, "
         COMMON_AUDIO_CAPS "; "
         "audio/x-raw, "
@@ -851,7 +852,8 @@ gst_matroska_mux_handle_sink_event (GstCollectPads * pads,
       event = NULL;
       break;
     }
-    case GST_EVENT_CUSTOM_DOWNSTREAM:{
+    case GST_EVENT_CUSTOM_DOWNSTREAM:
+    case GST_EVENT_CUSTOM_DOWNSTREAM_STICKY:{
       const GstStructure *structure;
 
       structure = gst_event_get_structure (event);
@@ -1021,6 +1023,12 @@ skip_details:
     fstr = gst_structure_get_string (structure, "format");
     if (fstr && strlen (fstr) == 4)
       videocontext->fourcc = GST_STR_FOURCC (fstr);
+    else if (!strcmp (fstr, "GRAY8"))
+      videocontext->fourcc = GST_MAKE_FOURCC ('Y', '8', '0', '0');
+    else if (!strcmp (fstr, "BGR"))
+      videocontext->fourcc = GST_MAKE_FOURCC ('B', 'G', 'R', 24);
+    else if (!strcmp (fstr, "RGB"))
+      videocontext->fourcc = GST_MAKE_FOURCC ('R', 'G', 'B', 24);
   } else if (!strcmp (mimetype, "video/x-huffyuv")      /* MS/VfW compatibility cases */
       ||!strcmp (mimetype, "video/x-divx")
       || !strcmp (mimetype, "video/x-dv")
@@ -1408,7 +1416,7 @@ theora_streamheader_to_codecdata (const GValue * streamheader,
     hdr += 4 + 4;
     par_num = GST_READ_UINT32_BE (hdr) >> 8;
     par_denom = GST_READ_UINT32_BE (hdr + 3) >> 8;
-    if (par_num > 0 && par_num > 0) {
+    if (par_num > 0 && par_denom > 0) {
       if (par_num > par_denom) {
         videocontext->display_width =
             videocontext->pixel_width * par_num / par_denom;
@@ -1834,6 +1842,8 @@ gst_matroska_mux_audio_pad_setcaps (GstPad * pad, GstCaps * caps)
           ("speex stream headers missing or malformed"));
       goto refuse_caps;
     }
+  } else if (!strcmp (mimetype, "audio/x-opus")) {
+    gst_matroska_mux_set_codec_id (context, GST_MATROSKA_CODEC_ID_AUDIO_OPUS);
   } else if (!strcmp (mimetype, "audio/x-ac3")) {
     gst_matroska_mux_set_codec_id (context, GST_MATROSKA_CODEC_ID_AUDIO_AC3);
   } else if (!strcmp (mimetype, "audio/x-eac3")) {

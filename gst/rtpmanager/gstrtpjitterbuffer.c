@@ -195,6 +195,24 @@ enum
   }                                                      \
 } G_STMT_END
 
+#define JBUF_WAIT_QUERY(priv,label) G_STMT_START {       \
+  GST_DEBUG ("waiting query");                           \
+  (priv)->waiting_query = TRUE;                          \
+  g_cond_wait (&(priv)->jbuf_query, &(priv)->jbuf_lock); \
+  (priv)->waiting_query = FALSE;                         \
+  GST_DEBUG ("waiting query done");                      \
+  if (G_UNLIKELY (priv->srcresult != GST_FLOW_OK))       \
+    goto label;                                          \
+} G_STMT_END
+#define JBUF_SIGNAL_QUERY(priv,res) G_STMT_START {       \
+  (priv)->last_query = res;                              \
+  if (G_UNLIKELY ((priv)->waiting_query)) {              \
+    GST_DEBUG ("signal query");                          \
+    g_cond_signal (&(priv)->jbuf_query);                 \
+  }                                                      \
+} G_STMT_END
+
+
 struct _GstRtpJitterBufferPrivate
 {
   GstPad *sinkpad, *srcpad;
@@ -206,6 +224,9 @@ struct _GstRtpJitterBufferPrivate
   GCond jbuf_timer;
   gboolean waiting_event;
   GCond jbuf_event;
+  gboolean waiting_query;
+  GCond jbuf_query;
+  gboolean last_query;
   gboolean discont;
   gboolean ts_discont;
   gboolean active;
@@ -254,6 +275,7 @@ struct _GstRtpJitterBufferPrivate
 
   /* state */
   gboolean eos;
+  guint last_percent;
 
   /* clock rate and rtp timestamp offset */
   gint last_pt;
@@ -704,6 +726,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   g_mutex_init (&priv->jbuf_lock);
   g_cond_init (&priv->jbuf_timer);
   g_cond_init (&priv->jbuf_event);
+  g_cond_init (&priv->jbuf_query);
 
   /* reset skew detection initialy */
   rtp_jitter_buffer_reset_skew (priv->jbuf);
@@ -739,9 +762,12 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   GST_OBJECT_FLAG_SET (jitterbuffer, GST_ELEMENT_FLAG_PROVIDE_CLOCK);
 }
 
+#define IS_DROPABLE(it) (((it)->type == ITEM_TYPE_BUFFER) || ((it)->type == ITEM_TYPE_LOST))
+
 #define ITEM_TYPE_BUFFER        0
 #define ITEM_TYPE_LOST          1
 #define ITEM_TYPE_EVENT         2
+#define ITEM_TYPE_QUERY         3
 
 static RTPJitterBufferItem *
 alloc_item (gpointer data, guint type, GstClockTime dts, GstClockTime pts,
@@ -766,7 +792,7 @@ alloc_item (gpointer data, guint type, GstClockTime dts, GstClockTime pts,
 static void
 free_item (RTPJitterBufferItem * item)
 {
-  if (item->data)
+  if (item->data && item->type != ITEM_TYPE_QUERY)
     gst_mini_object_unref (item->data);
   g_slice_free (RTPJitterBufferItem, item);
 }
@@ -784,6 +810,7 @@ gst_rtp_jitter_buffer_finalize (GObject * object)
   g_mutex_clear (&priv->jbuf_lock);
   g_cond_clear (&priv->jbuf_timer);
   g_cond_clear (&priv->jbuf_event);
+  g_cond_clear (&priv->jbuf_query);
 
   rtp_jitter_buffer_flush (priv->jbuf, (GFunc) free_item, NULL);
   g_object_unref (priv->jbuf);
@@ -1124,6 +1151,7 @@ gst_rtp_jitter_buffer_flush_start (GstRtpJitterBuffer * jitterbuffer)
   GST_DEBUG_OBJECT (jitterbuffer, "Disabling pop on queue");
   /* this unblocks any waiting pops on the src pad task */
   JBUF_SIGNAL_EVENT (priv);
+  JBUF_SIGNAL_QUERY (priv, FALSE);
   JBUF_UNLOCK (priv);
 }
 
@@ -1156,6 +1184,7 @@ gst_rtp_jitter_buffer_flush_stop (GstRtpJitterBuffer * jitterbuffer)
   priv->last_rtptime = -1;
   GST_DEBUG_OBJECT (jitterbuffer, "flush and reset jitterbuffer");
   rtp_jitter_buffer_flush (priv->jbuf, (GFunc) free_item, NULL);
+  rtp_jitter_buffer_disable_buffering (priv->jbuf, FALSE);
   rtp_jitter_buffer_reset_skew (priv->jbuf);
   remove_all_timers (jitterbuffer);
   JBUF_UNLOCK (priv);
@@ -1261,6 +1290,7 @@ gst_rtp_jitter_buffer_change_state (GstElement * element,
       priv->timer_running = FALSE;
       unschedule_current_timer (jitterbuffer);
       JBUF_SIGNAL_TIMER (priv);
+      JBUF_SIGNAL_QUERY (priv, FALSE);
       JBUF_UNLOCK (priv);
       g_thread_join (priv->timer_thread);
       priv->timer_thread = NULL;
@@ -1349,6 +1379,7 @@ queue_event (GstRtpJitterBuffer * jitterbuffer, GstEvent * event)
       break;
     case GST_EVENT_EOS:
       priv->eos = TRUE;
+      rtp_jitter_buffer_disable_buffering (priv->jbuf, TRUE);
       break;
     default:
       break;
@@ -1537,31 +1568,24 @@ parse_failed:
 }
 
 /* call with jbuf lock held */
-static void
-check_buffering_percent (GstRtpJitterBuffer * jitterbuffer, gint * percent)
+static GstMessage *
+check_buffering_percent (GstRtpJitterBuffer * jitterbuffer, gint percent)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  GstMessage *message = NULL;
 
-  /* too short a stream, or too close to EOS will never really fill buffer */
-  if (*percent != -1 && priv->npt_stop != -1 &&
-      priv->npt_stop - priv->npt_start <=
-      rtp_jitter_buffer_get_delay (priv->jbuf)) {
-    GST_DEBUG_OBJECT (jitterbuffer, "short stream; faking full buffer");
-    rtp_jitter_buffer_set_buffering (priv->jbuf, FALSE);
-    *percent = 100;
-  }
-}
-
-static void
-post_buffering_percent (GstRtpJitterBuffer * jitterbuffer, gint percent)
-{
-  GstMessage *message;
+  if (percent == -1)
+    return NULL;
 
   /* Post a buffering message */
-  message = gst_message_new_buffering (GST_OBJECT_CAST (jitterbuffer), percent);
-  gst_message_set_buffering_stats (message, GST_BUFFERING_LIVE, -1, -1, -1);
+  if (priv->last_percent != percent) {
+    priv->last_percent = percent;
+    message =
+        gst_message_new_buffering (GST_OBJECT_CAST (jitterbuffer), percent);
+    gst_message_set_buffering_stats (message, GST_BUFFERING_LIVE, -1, -1, -1);
+  }
 
-  gst_element_post_message (GST_ELEMENT_CAST (jitterbuffer), message);
+  return message;
 }
 
 static GstClockTime
@@ -1980,7 +2004,7 @@ calculate_expected (GstRtpJitterBuffer * jitterbuffer, guint32 expected,
     type = TIMER_TYPE_LOST;
   }
 
-  while (expected < seqnum) {
+  while (gst_rtp_buffer_compare_seqnum (expected, seqnum) > 0) {
     add_timer (jitterbuffer, type, expected, 0, expected_dts, 0, duration);
     expected_dts += duration;
     expected++;
@@ -2025,7 +2049,8 @@ calculate_jitter (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
   /* jitter is stored in nanoseconds */
   priv->avg_jitter = (diff + (15 * priv->avg_jitter)) >> 4;
 
-  GST_LOG ("dtsdiff %" GST_TIME_FORMAT " rtptime %" GST_TIME_FORMAT
+  GST_LOG_OBJECT (jitterbuffer,
+      "dtsdiff %" GST_TIME_FORMAT " rtptime %" GST_TIME_FORMAT
       ", clock-rate %d, diff %" GST_TIME_FORMAT ", jitter: %" GST_TIME_FORMAT,
       GST_TIME_ARGS (dtsdiff), GST_TIME_ARGS (rtpdiffns), priv->clock_rate,
       GST_TIME_ARGS (diff), GST_TIME_ARGS (priv->avg_jitter));
@@ -2035,7 +2060,8 @@ calculate_jitter (GstRtpJitterBuffer * jitterbuffer, GstClockTime dts,
   /* ERRORS */
 no_time:
   {
-    GST_WARNING ("no dts or no clock-rate");
+    GST_DEBUG_OBJECT (jitterbuffer,
+        "no dts or no clock-rate, can't calculate jitter");
     return;
   }
 }
@@ -2057,6 +2083,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
   gboolean do_next_seqnum = FALSE;
   RTPJitterBufferItem *item;
+  GstMessage *msg = NULL;
 
   jitterbuffer = GST_RTP_JITTER_BUFFER (parent);
 
@@ -2224,8 +2251,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
 
       old_item = rtp_jitter_buffer_peek (priv->jbuf);
 
-      /* only drop non-event buffers */
-      if (old_item->type != ITEM_TYPE_EVENT) {
+      if (IS_DROPABLE (old_item)) {
         old_item = rtp_jitter_buffer_pop (priv->jbuf, &percent);
         GST_DEBUG_OBJECT (jitterbuffer, "Queue full, dropping old packet %p",
             old_item);
@@ -2265,13 +2291,13 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   GST_DEBUG_OBJECT (jitterbuffer, "Pushed packet #%d, now %d packets, tail: %d",
       seqnum, rtp_jitter_buffer_num_packets (priv->jbuf), tail);
 
-  check_buffering_percent (jitterbuffer, &percent);
+  msg = check_buffering_percent (jitterbuffer, percent);
 
 finished:
   JBUF_UNLOCK (priv);
 
-  if (percent != -1)
-    post_buffering_percent (jitterbuffer, percent);
+  if (msg)
+    gst_element_post_message (GST_ELEMENT_CAST (jitterbuffer), msg);
 
   return ret;
 
@@ -2355,45 +2381,61 @@ static void
 update_estimated_eos (GstRtpJitterBuffer * jitterbuffer,
     RTPJitterBufferItem * item)
 {
+  guint64 total, elapsed, left, estimated;
+  GstClockTime out_time;
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
 
-  if (priv->npt_stop != -1 && priv->ext_timestamp != -1
-      && priv->clock_base != -1 && priv->clock_rate > 0) {
-    guint64 elapsed, estimated;
+  if (priv->npt_stop == -1 || priv->ext_timestamp == -1
+      || priv->clock_base == -1 || priv->clock_rate <= 0)
+    return;
 
-    elapsed = compute_elapsed (jitterbuffer, item);
+  /* compute the elapsed time */
+  elapsed = compute_elapsed (jitterbuffer, item);
 
-    if (elapsed > priv->last_elapsed || !priv->last_elapsed) {
-      guint64 left;
-      GstClockTime out_time;
+  /* do nothing if elapsed time doesn't increment */
+  if (priv->last_elapsed && elapsed <= priv->last_elapsed)
+    return;
 
-      priv->last_elapsed = elapsed;
+  priv->last_elapsed = elapsed;
 
-      left = priv->npt_stop - priv->npt_start;
-      GST_LOG_OBJECT (jitterbuffer, "left %" GST_TIME_FORMAT,
-          GST_TIME_ARGS (left));
+  /* this is the total time we need to play */
+  total = priv->npt_stop - priv->npt_start;
+  GST_LOG_OBJECT (jitterbuffer, "total %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (total));
 
-      out_time = item->dts;
+  /* this is how much time there is left */
+  if (total > elapsed)
+    left = total - elapsed;
+  else
+    left = 0;
 
-      if (elapsed > 0)
-        estimated = gst_util_uint64_scale (out_time, left, elapsed);
-      else {
-        /* if there is almost nothing left,
-         * we may never advance enough to end up in the above case */
-        if (left < GST_SECOND)
-          estimated = GST_SECOND;
-        else
-          estimated = -1;
-      }
+  /* if we have less time left that the size of the buffer, we will not
+   * be able to keep it filled, disabled buffering then */
+  if (left < rtp_jitter_buffer_get_delay (priv->jbuf)) {
+    GST_DEBUG_OBJECT (jitterbuffer, "left %" GST_TIME_FORMAT
+        ", disable buffering close to EOS", GST_TIME_ARGS (left));
+    rtp_jitter_buffer_disable_buffering (priv->jbuf, TRUE);
+  }
 
-      GST_LOG_OBJECT (jitterbuffer, "elapsed %" GST_TIME_FORMAT ", estimated %"
-          GST_TIME_FORMAT, GST_TIME_ARGS (elapsed), GST_TIME_ARGS (estimated));
+  /* this is the current time as running-time */
+  out_time = item->dts;
 
-      if (estimated != -1 && priv->estimated_eos != estimated) {
-        set_timer (jitterbuffer, TIMER_TYPE_EOS, -1, estimated);
-        priv->estimated_eos = estimated;
-      }
-    }
+  if (elapsed > 0)
+    estimated = gst_util_uint64_scale (out_time, total, elapsed);
+  else {
+    /* if there is almost nothing left,
+     * we may never advance enough to end up in the above case */
+    if (total < GST_SECOND)
+      estimated = GST_SECOND;
+    else
+      estimated = -1;
+  }
+  GST_LOG_OBJECT (jitterbuffer, "elapsed %" GST_TIME_FORMAT ", estimated %"
+      GST_TIME_FORMAT, GST_TIME_ARGS (elapsed), GST_TIME_ARGS (estimated));
+
+  if (estimated != -1 && priv->estimated_eos != estimated) {
+    set_timer (jitterbuffer, TIMER_TYPE_EOS, -1, estimated);
+    priv->estimated_eos = estimated;
   }
 }
 
@@ -2402,55 +2444,64 @@ static GstFlowReturn
 pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
-  GstFlowReturn result;
+  GstFlowReturn result = GST_FLOW_OK;
   RTPJitterBufferItem *item;
-  GstBuffer *outbuf;
-  GstEvent *outevent;
+  GstBuffer *outbuf = NULL;
+  GstEvent *outevent = NULL;
+  GstQuery *outquery = NULL;
   GstClockTime dts, pts;
   gint percent = -1;
-  gboolean is_buffer, do_push = TRUE;
+  gboolean do_push = TRUE;
+  guint type;
+  GstMessage *msg;
 
   /* when we get here we are ready to pop and push the buffer */
   item = rtp_jitter_buffer_pop (priv->jbuf, &percent);
+  type = item->type;
 
-  is_buffer = GST_IS_BUFFER (item->data);
+  switch (type) {
+    case ITEM_TYPE_BUFFER:
 
-  if (is_buffer) {
-    check_buffering_percent (jitterbuffer, &percent);
+      /* we need to make writable to change the flags and timestamps */
+      outbuf = gst_buffer_make_writable (item->data);
 
-    /* we need to make writable to change the flags and timestamps */
-    outbuf = gst_buffer_make_writable (item->data);
+      if (G_UNLIKELY (priv->discont)) {
+        /* set DISCONT flag when we missed a packet. We pushed the buffer writable
+         * into the jitterbuffer so we can modify now. */
+        GST_DEBUG_OBJECT (jitterbuffer, "mark output buffer discont");
+        GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_DISCONT);
+        priv->discont = FALSE;
+      }
+      if (G_UNLIKELY (priv->ts_discont)) {
+        GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_RESYNC);
+        priv->ts_discont = FALSE;
+      }
 
-    if (G_UNLIKELY (priv->discont)) {
-      /* set DISCONT flag when we missed a packet. We pushed the buffer writable
-       * into the jitterbuffer so we can modify now. */
-      GST_DEBUG_OBJECT (jitterbuffer, "mark output buffer discont");
-      GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_DISCONT);
-      priv->discont = FALSE;
-    }
-    if (G_UNLIKELY (priv->ts_discont)) {
-      GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_RESYNC);
-      priv->ts_discont = FALSE;
-    }
+      dts =
+          gst_segment_to_position (&priv->segment, GST_FORMAT_TIME, item->dts);
+      pts =
+          gst_segment_to_position (&priv->segment, GST_FORMAT_TIME, item->pts);
 
-    dts = gst_segment_to_position (&priv->segment, GST_FORMAT_TIME, item->dts);
-    pts = gst_segment_to_position (&priv->segment, GST_FORMAT_TIME, item->pts);
+      /* apply timestamp with offset to buffer now */
+      GST_BUFFER_DTS (outbuf) = apply_offset (jitterbuffer, dts);
+      GST_BUFFER_PTS (outbuf) = apply_offset (jitterbuffer, pts);
 
-    /* apply timestamp with offset to buffer now */
-    GST_BUFFER_DTS (outbuf) = apply_offset (jitterbuffer, dts);
-    GST_BUFFER_PTS (outbuf) = apply_offset (jitterbuffer, pts);
+      /* update the elapsed time when we need to check against the npt stop time. */
+      update_estimated_eos (jitterbuffer, item);
 
-    /* update the elapsed time when we need to check against the npt stop time. */
-    update_estimated_eos (jitterbuffer, item);
-
-    priv->last_out_time = GST_BUFFER_PTS (outbuf);
-  } else {
-    outevent = item->data;
-    if (item->type == ITEM_TYPE_LOST) {
+      priv->last_out_time = GST_BUFFER_PTS (outbuf);
+      break;
+    case ITEM_TYPE_LOST:
       priv->discont = TRUE;
       if (!priv->do_lost)
         do_push = FALSE;
-    }
+      /* FALLTHROUGH */
+    case ITEM_TYPE_EVENT:
+      outevent = item->data;
+      break;
+    case ITEM_TYPE_QUERY:
+      outquery = item->data;
+      break;
   }
 
   /* now we are ready to push the buffer. Save the seqnum and release the lock
@@ -2459,33 +2510,53 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
     priv->last_popped_seqnum = seqnum;
     priv->next_seqnum = (seqnum + item->count) & 0xffff;
   }
+  msg = check_buffering_percent (jitterbuffer, percent);
   JBUF_UNLOCK (priv);
 
   item->data = NULL;
   free_item (item);
 
-  if (is_buffer) {
-    /* push buffer */
-    if (percent != -1)
-      post_buffering_percent (jitterbuffer, percent);
+  if (msg)
+    gst_element_post_message (GST_ELEMENT_CAST (jitterbuffer), msg);
 
-    GST_DEBUG_OBJECT (jitterbuffer,
-        "Pushing buffer %d, dts %" GST_TIME_FORMAT ", pts %" GST_TIME_FORMAT,
-        seqnum, GST_TIME_ARGS (GST_BUFFER_DTS (outbuf)),
-        GST_TIME_ARGS (GST_BUFFER_PTS (outbuf)));
-    result = gst_pad_push (priv->srcpad, outbuf);
-  } else {
-    GST_DEBUG_OBJECT (jitterbuffer, "Pushing event %d", seqnum);
+  switch (type) {
+    case ITEM_TYPE_BUFFER:
+      /* push buffer */
+      GST_DEBUG_OBJECT (jitterbuffer,
+          "Pushing buffer %d, dts %" GST_TIME_FORMAT ", pts %" GST_TIME_FORMAT,
+          seqnum, GST_TIME_ARGS (GST_BUFFER_DTS (outbuf)),
+          GST_TIME_ARGS (GST_BUFFER_PTS (outbuf)));
+      result = gst_pad_push (priv->srcpad, outbuf);
 
-    if (do_push)
-      gst_pad_push_event (priv->srcpad, outevent);
-    else
-      gst_event_unref (outevent);
+      JBUF_LOCK_CHECK (priv, out_flushing);
+      break;
+    case ITEM_TYPE_LOST:
+    case ITEM_TYPE_EVENT:
+      GST_DEBUG_OBJECT (jitterbuffer, "Pushing event %" GST_PTR_FORMAT
+          ", seqnum %d", outevent, seqnum);
 
-    result = GST_FLOW_OK;
+      if (do_push)
+        gst_pad_push_event (priv->srcpad, outevent);
+      else
+        gst_event_unref (outevent);
+
+      result = GST_FLOW_OK;
+
+      JBUF_LOCK_CHECK (priv, out_flushing);
+      break;
+    case ITEM_TYPE_QUERY:
+    {
+      gboolean res;
+
+      res = gst_pad_peer_query (priv->srcpad, outquery);
+
+      JBUF_LOCK_CHECK (priv, out_flushing);
+      result = GST_FLOW_OK;
+      GST_LOG_OBJECT (jitterbuffer, "did query %p, return %d", outquery, res);
+      JBUF_SIGNAL_QUERY (priv, res);
+      break;
+    }
   }
-  JBUF_LOCK_CHECK (priv, out_flushing);
-
   return result;
 
   /* ERRORS */
@@ -2726,6 +2797,10 @@ do_eos_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
 
   GST_INFO_OBJECT (jitterbuffer, "got the NPT timeout");
   remove_timer (jitterbuffer, timer);
+  if (!priv->eos) {
+    /* there was no EOS in the buffer, put one in there now */
+    queue_event (jitterbuffer, gst_event_new_eos ());
+  }
   JBUF_SIGNAL_EVENT (priv);
 
   return TRUE;
@@ -2806,7 +2881,9 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
       } else if (timer_timeout == -1) {
         /* we already have an immediate timeout, the new timer must be an
          * immediate timer with smaller seqnum to become the best */
-        if (test_timeout == -1 && test->seqnum < timer->seqnum)
+        if (test_timeout == -1
+            && (gst_rtp_buffer_compare_seqnum (test->seqnum,
+                    timer->seqnum) > 0))
           save_best = TRUE;
       } else if (test_timeout == -1) {
         /* first immediate timer */
@@ -2814,7 +2891,9 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
       } else if (test_timeout < timer_timeout) {
         /* earlier timer */
         save_best = TRUE;
-      } else if (test_timeout == timer_timeout && test->seqnum < timer->seqnum) {
+      } else if (test_timeout == timer_timeout
+          && (gst_rtp_buffer_compare_seqnum (test->seqnum,
+                  timer->seqnum) > 0)) {
         /* same timer, smaller seqnum */
         save_best = TRUE;
       }
@@ -2870,8 +2949,11 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
       ret = gst_clock_id_wait (id, &clock_jitter);
 
       JBUF_LOCK (priv);
-      if (!priv->timer_running)
+      if (!priv->timer_running) {
+        gst_clock_id_unref (id);
+        priv->clock_id = NULL;
         break;
+      }
 
       if (ret != GST_CLOCK_UNSCHEDULED) {
         now = timer_timeout + MAX (clock_jitter, 0);
@@ -2904,7 +2986,7 @@ static void
 gst_rtp_jitter_buffer_loop (GstRtpJitterBuffer * jitterbuffer)
 {
   GstRtpJitterBufferPrivate *priv;
-  GstFlowReturn result;
+  GstFlowReturn result = GST_FLOW_OK;
 
   priv = jitterbuffer->priv;
 
@@ -2920,8 +3002,6 @@ gst_rtp_jitter_buffer_loop (GstRtpJitterBuffer * jitterbuffer)
   while (result == GST_FLOW_OK);
   /* store result for upstream */
   priv->srcresult = result;
-  JBUF_UNLOCK (priv);
-
   /* if we get here we need to pause */
   goto pause;
 
@@ -2929,15 +3009,17 @@ gst_rtp_jitter_buffer_loop (GstRtpJitterBuffer * jitterbuffer)
 flushing:
   {
     result = priv->srcresult;
-    JBUF_UNLOCK (priv);
     goto pause;
   }
 pause:
   {
-    const gchar *reason = gst_flow_get_name (result);
     GstEvent *event;
 
-    GST_DEBUG_OBJECT (jitterbuffer, "pausing task, reason %s", reason);
+    JBUF_SIGNAL_QUERY (priv, FALSE);
+    JBUF_UNLOCK (priv);
+
+    GST_DEBUG_OBJECT (jitterbuffer, "pausing task, reason %s",
+        gst_flow_get_name (result));
     gst_pad_pause_task (priv->srcpad);
     if (result == GST_FLOW_EOS) {
       event = gst_event_new_eos ();
@@ -3113,6 +3195,11 @@ gst_rtp_jitter_buffer_sink_query (GstPad * pad, GstObject * parent,
     GstQuery * query)
 {
   gboolean res = FALSE;
+  GstRtpJitterBuffer *jitterbuffer;
+  GstRtpJitterBufferPrivate *priv;
+
+  jitterbuffer = GST_RTP_JITTER_BUFFER (parent);
+  priv = jitterbuffer->priv;
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CAPS:
@@ -3128,14 +3215,36 @@ gst_rtp_jitter_buffer_sink_query (GstPad * pad, GstObject * parent,
     }
     default:
       if (GST_QUERY_IS_SERIALIZED (query)) {
-        GST_WARNING_OBJECT (pad, "unhandled serialized query");
-        res = FALSE;
+        RTPJitterBufferItem *item;
+
+        JBUF_LOCK_CHECK (priv, out_flushing);
+        if (rtp_jitter_buffer_get_mode (priv->jbuf) !=
+            RTP_JITTER_BUFFER_MODE_BUFFER) {
+          GST_DEBUG_OBJECT (jitterbuffer, "adding serialized query");
+          item = alloc_item (query, ITEM_TYPE_QUERY, -1, -1, -1, 0, -1);
+          rtp_jitter_buffer_insert (priv->jbuf, item, NULL, NULL);
+          JBUF_SIGNAL_EVENT (priv);
+          JBUF_WAIT_QUERY (priv, out_flushing);
+          res = priv->last_query;
+        } else {
+          GST_DEBUG_OBJECT (jitterbuffer, "refusing query, we are buffering");
+          res = FALSE;
+        }
+        JBUF_UNLOCK (priv);
       } else {
         res = gst_pad_query_default (pad, parent, query);
       }
       break;
   }
   return res;
+  /* ERRORS */
+out_flushing:
+  {
+    GST_DEBUG_OBJECT (jitterbuffer, "we are flushing");
+    JBUF_UNLOCK (priv);
+    return FALSE;
+  }
+
 }
 
 static gboolean

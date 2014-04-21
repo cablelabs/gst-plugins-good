@@ -44,8 +44,6 @@
 #include <config.h>
 #endif
 
-#undef HAVE_XVIDEO
-
 #include <string.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -57,9 +55,6 @@
 
 #include "gstv4l2colorbalance.h"
 #include "gstv4l2tuner.h"
-#ifdef HAVE_XVIDEO
-#include "gstv4l2xoverlay.h"
-#endif
 #include "gstv4l2vidorient.h"
 
 #include "gst/gst-i18n-plugin.h"
@@ -87,9 +82,6 @@ static guint gst_v4l2_signals[LAST_SIGNAL] = { 0 };
 
 GST_IMPLEMENT_V4L2_COLOR_BALANCE_METHODS (GstV4l2Src, gst_v4l2src);
 GST_IMPLEMENT_V4L2_TUNER_METHODS (GstV4l2Src, gst_v4l2src);
-#ifdef HAVE_XVIDEO
-GST_IMPLEMENT_V4L2_XOVERLAY_METHODS (GstV4l2Src, gst_v4l2src);
-#endif
 GST_IMPLEMENT_V4L2_VIDORIENT_METHODS (GstV4l2Src, gst_v4l2src);
 
 static void gst_v4l2src_uri_handler_init (gpointer g_iface,
@@ -99,11 +91,6 @@ static void gst_v4l2src_uri_handler_init (gpointer g_iface,
 G_DEFINE_TYPE_WITH_CODE (GstV4l2Src, gst_v4l2src, GST_TYPE_PUSH_SRC,
     G_IMPLEMENT_INTERFACE (GST_TYPE_URI_HANDLER, gst_v4l2src_uri_handler_init);
     G_IMPLEMENT_INTERFACE (GST_TYPE_TUNER, gst_v4l2src_tuner_interface_init);
-#ifdef HAVE_XVIDEO
-    /* FIXME: does GstXOverlay for v4l2src make sense in a GStreamer context? */
-    G_IMPLEMENT_INTERFACE (GST_TYPE_X_OVERLAY,
-        gst_v4l2src_xoverlay_interface_init);
-#endif
     G_IMPLEMENT_INTERFACE (GST_TYPE_COLOR_BALANCE,
         gst_v4l2src_color_balance_interface_init);
     G_IMPLEMENT_INTERFACE (GST_TYPE_VIDEO_ORIENTATION,
@@ -273,13 +260,20 @@ gst_v4l2src_fixate (GstBaseSrc * basesrc, GstCaps * caps)
   for (i = 0; i < gst_caps_get_size (caps); ++i) {
     structure = gst_caps_get_structure (caps, i);
 
-    /* We are fixating to a resonable 320x200 resolution
+    /* We are fixating to a reasonable 320x200 resolution
        and the maximum framerate resolution for that size */
-    gst_structure_fixate_field_nearest_int (structure, "width", 320);
-    gst_structure_fixate_field_nearest_int (structure, "height", 200);
-    gst_structure_fixate_field_nearest_fraction (structure, "framerate",
-        G_MAXINT, 1);
-    gst_structure_fixate_field (structure, "format");
+    if (gst_structure_has_field (structure, "width"))
+      gst_structure_fixate_field_nearest_int (structure, "width", 320);
+
+    if (gst_structure_has_field (structure, "height"))
+      gst_structure_fixate_field_nearest_int (structure, "height", 200);
+
+    if (gst_structure_has_field (structure, "framerate"))
+      gst_structure_fixate_field_nearest_fraction (structure, "framerate",
+          G_MAXINT, 1);
+
+    if (gst_structure_has_field (structure, "format"))
+      gst_structure_fixate_field (structure, "format");
   }
 
   GST_DEBUG_OBJECT (basesrc, "fixated caps %" GST_PTR_FORMAT, caps);

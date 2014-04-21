@@ -136,8 +136,8 @@ gst_avi_demux_class_init (GstAviDemuxClass * klass)
 {
   GstElementClass *gstelement_class = GST_ELEMENT_CLASS (klass);
   GObjectClass *gobject_class = (GObjectClass *) klass;
-  GstPadTemplate *videosrctempl, *audiosrctempl, *subsrctempl;
-  GstCaps *audcaps, *vidcaps, *subcaps;
+  GstPadTemplate *videosrctempl, *audiosrctempl, *subsrctempl, *subpicsrctempl;
+  GstCaps *audcaps, *vidcaps, *subcaps, *subpiccaps;;
 
   GST_DEBUG_CATEGORY_INIT (avidemux_debug, "avidemux",
       0, "Demuxer for AVI streams");
@@ -165,9 +165,13 @@ gst_avi_demux_class_init (GstAviDemuxClass * klass)
   subcaps = gst_caps_new_empty_simple ("application/x-subtitle-avi");
   subsrctempl = gst_pad_template_new ("subtitle_%u",
       GST_PAD_SRC, GST_PAD_SOMETIMES, subcaps);
+  subpiccaps = gst_caps_new_empty_simple ("subpicture/x-xsub");
+  subpicsrctempl = gst_pad_template_new ("subpicture_%u",
+      GST_PAD_SRC, GST_PAD_SOMETIMES, subpiccaps);
   gst_element_class_add_pad_template (gstelement_class, audiosrctempl);
   gst_element_class_add_pad_template (gstelement_class, videosrctempl);
   gst_element_class_add_pad_template (gstelement_class, subsrctempl);
+  gst_element_class_add_pad_template (gstelement_class, subpicsrctempl);
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&sink_templ));
 
@@ -255,6 +259,7 @@ gst_avi_demux_reset (GstAviDemux * avi)
   avi->num_v_streams = 0;
   avi->num_a_streams = 0;
   avi->num_t_streams = 0;
+  avi->num_sp_streams = 0;
   avi->main_stream = -1;
 
   avi->have_group_id = FALSE;
@@ -461,7 +466,7 @@ gst_avi_demux_handle_src_query (GstPad * pad, GstObject * parent,
         if (stream->is_vbr) {
           /* VBR */
           pos = avi_stream_convert_frames_to_time_unchecked (stream,
-              stream->current_total);
+              stream->current_entry);
           GST_DEBUG_OBJECT (avi, "VBR convert frame %u, time %"
               GST_TIME_FORMAT, stream->current_entry, GST_TIME_ARGS (pos));
         } else if (stream->strf.auds->av_bps != 0) {
@@ -1929,8 +1934,8 @@ gst_avi_demux_roundup_list (GstAviDemux * avi, GstBuffer ** buf)
 }
 
 static GstCaps *
-gst_avi_demux_check_caps (GstAviDemux * avi, GstCaps * caps,
-    GstBuffer ** rgb8_palette)
+gst_avi_demux_check_caps (GstAviDemux * avi, GstAviStream * stream,
+    GstCaps * caps)
 {
   GstStructure *s;
   const GValue *val;
@@ -1939,11 +1944,17 @@ gst_avi_demux_check_caps (GstAviDemux * avi, GstCaps * caps,
   caps = gst_caps_make_writable (caps);
 
   s = gst_caps_get_structure (caps, 0);
-  if (gst_structure_has_name (s, "video/x-raw") &&
-      gst_structure_has_field_typed (s, "palette_data", GST_TYPE_BUFFER)) {
-    gst_structure_get (s, "palette_data", GST_TYPE_BUFFER, rgb8_palette, NULL);
-    gst_structure_remove_field (s, "palette_data");
-    return caps;
+  if (gst_structure_has_name (s, "video/x-raw")) {
+    stream->is_raw = TRUE;
+    if (!gst_structure_has_field (s, "pixel-aspect-ratio"))
+      gst_structure_set (s, "pixel-aspect-ratio", GST_TYPE_FRACTION,
+          1, 1, NULL);
+    if (gst_structure_has_field_typed (s, "palette_data", GST_TYPE_BUFFER)) {
+      gst_structure_get (s, "palette_data", GST_TYPE_BUFFER,
+          &stream->rgb8_palette, NULL);
+      gst_structure_remove_field (s, "palette_data");
+      return caps;
+    }
   } else if (!gst_structure_has_name (s, "video/x-h264")) {
     return caps;
   }
@@ -2012,6 +2023,7 @@ gst_avi_demux_parse_stream (GstAviDemux * avi, GstBuffer * buf)
   gst_riff_vprp *vprp = NULL;
   GstEvent *event;
   gchar *stream_id;
+  GstMapInfo map;
 
   element = GST_ELEMENT_CAST (avi);
 
@@ -2205,22 +2217,17 @@ gst_avi_demux_parse_stream (GstAviDemux * avi, GstBuffer * buf)
         break;
       case GST_RIFF_TAG_strn:
         g_free (stream->name);
-        if (sub != NULL) {
-          GstMapInfo map;
 
-          gst_buffer_map (sub, &map, GST_MAP_READ);
-          stream->name = g_strndup ((gchar *) map.data, map.size);
-          gst_buffer_unmap (sub, &map);
-          gst_buffer_unref (sub);
-          sub = NULL;
+        gst_buffer_map (sub, &map, GST_MAP_READ);
+        stream->name = g_strndup ((gchar *) map.data, map.size);
+        gst_buffer_unmap (sub, &map);
+        gst_buffer_unref (sub);
+        sub = NULL;
 
-          if (avi->globaltags == NULL)
-            avi->globaltags = gst_tag_list_new_empty ();
-          gst_tag_list_add (avi->globaltags, GST_TAG_MERGE_REPLACE,
-              GST_TAG_TITLE, stream->name, NULL);
-        } else {
-          stream->name = g_strdup ("");
-        }
+        if (avi->globaltags == NULL)
+          avi->globaltags = gst_tag_list_new_empty ();
+        gst_tag_list_add (avi->globaltags, GST_TAG_MERGE_REPLACE,
+            GST_TAG_TITLE, stream->name, NULL);
         GST_DEBUG_OBJECT (avi, "stream name: %s", stream->name);
         break;
       case GST_RIFF_IDIT:
@@ -2280,32 +2287,41 @@ gst_avi_demux_parse_stream (GstAviDemux * avi, GstBuffer * buf)
 
       fourcc = (stream->strf.vids->compression) ?
           stream->strf.vids->compression : stream->strh->fcc_handler;
-      padname = g_strdup_printf ("video_%u", avi->num_v_streams);
-      templ = gst_element_class_get_pad_template (klass, "video_%u");
       caps = gst_riff_create_video_caps (fourcc, stream->strh,
           stream->strf.vids, stream->extradata, stream->initdata, &codec_name);
-      if (!caps) {
-        caps = gst_caps_new_simple ("video/x-avi-unknown", "fourcc",
-            G_TYPE_INT, fourcc, NULL);
-      } else if (got_vprp && vprp) {
-        guint32 aspect_n, aspect_d;
-        gint n, d;
 
-        aspect_n = vprp->aspect >> 16;
-        aspect_d = vprp->aspect & 0xffff;
-        /* calculate the pixel aspect ratio using w/h and aspect ratio */
-        n = aspect_n * stream->strf.vids->height;
-        d = aspect_d * stream->strf.vids->width;
-        if (n && d)
-          gst_caps_set_simple (caps, "pixel-aspect-ratio", GST_TYPE_FRACTION,
-              n, d, NULL);
-        /* very local, not needed elsewhere */
-        g_free (vprp);
-        vprp = NULL;
+      /* DXSB is XSUB, and it is placed inside a vids */
+      if (!caps || fourcc != GST_MAKE_FOURCC ('D', 'X', 'S', 'B')) {
+        padname = g_strdup_printf ("video_%u", avi->num_v_streams);
+        templ = gst_element_class_get_pad_template (klass, "video_%u");
+        if (!caps) {
+          caps = gst_caps_new_simple ("video/x-avi-unknown", "fourcc",
+              G_TYPE_INT, fourcc, NULL);
+        } else if (got_vprp && vprp) {
+          guint32 aspect_n, aspect_d;
+          gint n, d;
+
+          aspect_n = vprp->aspect >> 16;
+          aspect_d = vprp->aspect & 0xffff;
+          /* calculate the pixel aspect ratio using w/h and aspect ratio */
+          n = aspect_n * stream->strf.vids->height;
+          d = aspect_d * stream->strf.vids->width;
+          if (n && d)
+            gst_caps_set_simple (caps, "pixel-aspect-ratio", GST_TYPE_FRACTION,
+                n, d, NULL);
+          /* very local, not needed elsewhere */
+          g_free (vprp);
+          vprp = NULL;
+        }
+        caps = gst_avi_demux_check_caps (avi, stream, caps);
+        tag_name = GST_TAG_VIDEO_CODEC;
+        avi->num_v_streams++;
+      } else {
+        padname = g_strdup_printf ("subpicture_%u", avi->num_sp_streams);
+        templ = gst_element_class_get_pad_template (klass, "subpicture_%u");
+        tag_name = NULL;
+        avi->num_sp_streams++;
       }
-      caps = gst_avi_demux_check_caps (avi, caps, &stream->rgb8_palette);
-      tag_name = GST_TAG_VIDEO_CODEC;
-      avi->num_v_streams++;
       break;
     }
     case GST_RIFF_FCC_auds:{
@@ -2430,7 +2446,7 @@ gst_avi_demux_parse_stream (GstAviDemux * avi, GstBuffer * buf)
   gst_caps_unref (caps);
 
   /* make tags */
-  if (codec_name) {
+  if (codec_name && tag_name) {
     if (!stream->taglist)
       stream->taglist = gst_tag_list_new_empty ();
 
@@ -5219,14 +5235,16 @@ gst_avi_demux_loop_data (GstAviDemux * avi)
     buf = gst_avi_demux_invert (stream, buf);
 
     /* mark non-keyframes */
-    if (keyframe) {
+    if (keyframe || stream->is_raw) {
       GST_BUFFER_FLAG_UNSET (buf, GST_BUFFER_FLAG_DELTA_UNIT);
       GST_BUFFER_PTS (buf) = timestamp;
     } else {
       GST_BUFFER_FLAG_SET (buf, GST_BUFFER_FLAG_DELTA_UNIT);
       GST_BUFFER_PTS (buf) = GST_CLOCK_TIME_NONE;
     }
+
     GST_BUFFER_DTS (buf) = timestamp;
+
     GST_BUFFER_DURATION (buf) = duration;
     GST_BUFFER_OFFSET (buf) = out_offset;
     GST_BUFFER_OFFSET_END (buf) = out_offset_end;

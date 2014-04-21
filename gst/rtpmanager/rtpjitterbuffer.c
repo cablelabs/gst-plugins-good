@@ -226,6 +226,19 @@ rtp_jitter_buffer_reset_skew (RTPJitterBuffer * jbuf)
   GST_DEBUG ("reset skew correction");
 }
 
+/**
+ * rtp_jitter_buffer_disable_buffering:
+ * @jbuf: an #RTPJitterBuffer
+ * @disabled: the new state
+ *
+ * Enable or disable buffering on @jbuf.
+ */
+void
+rtp_jitter_buffer_disable_buffering (RTPJitterBuffer * jbuf, gboolean disabled)
+{
+  jbuf->buffering_disabled = disabled;
+}
+
 static void
 rtp_jitter_buffer_resync (RTPJitterBuffer * jbuf, GstClockTime time,
     GstClockTime gstrtptime, guint64 ext_rtptime, gboolean reset_skew)
@@ -253,7 +266,7 @@ get_buffer_level (RTPJitterBuffer * jbuf)
   /* first first buffer with timestamp */
   high_buf = (RTPJitterBufferItem *) g_queue_peek_tail_link (jbuf->packets);
   while (high_buf) {
-    if (high_buf->dts != -1)
+    if (high_buf->dts != -1 || high_buf->pts != -1)
       break;
 
     high_buf = (RTPJitterBufferItem *) g_list_previous (high_buf);
@@ -261,7 +274,7 @@ get_buffer_level (RTPJitterBuffer * jbuf)
 
   low_buf = (RTPJitterBufferItem *) g_queue_peek_head_link (jbuf->packets);
   while (low_buf) {
-    if (low_buf->dts != -1)
+    if (low_buf->dts != -1 || low_buf->pts != -1)
       break;
 
     low_buf = (RTPJitterBufferItem *) g_list_next (low_buf);
@@ -272,8 +285,8 @@ get_buffer_level (RTPJitterBuffer * jbuf)
   } else {
     guint64 high_ts, low_ts;
 
-    high_ts = high_buf->dts;
-    low_ts = low_buf->dts;
+    high_ts = high_buf->dts != -1 ? high_buf->dts : high_buf->pts;
+    low_ts = low_buf->dts != -1 ? low_buf->dts : low_buf->pts;
 
     if (high_ts > low_ts)
       level = high_ts - low_ts;
@@ -297,9 +310,14 @@ update_buffer_level (RTPJitterBuffer * jbuf, gint * percent)
   level = get_buffer_level (jbuf);
   GST_DEBUG ("buffer level %" GST_TIME_FORMAT, GST_TIME_ARGS (level));
 
+  if (jbuf->buffering_disabled) {
+    GST_DEBUG ("buffering is disabled");
+    level = jbuf->high_level;
+  }
+
   if (jbuf->buffering) {
     post = TRUE;
-    if (level > jbuf->high_level) {
+    if (level >= jbuf->high_level) {
       GST_DEBUG ("buffering finished");
       jbuf->buffering = FALSE;
     }
@@ -850,7 +868,7 @@ rtp_jitter_buffer_flush (RTPJitterBuffer * jbuf, GFunc free_func,
 gboolean
 rtp_jitter_buffer_is_buffering (RTPJitterBuffer * jbuf)
 {
-  return jbuf->buffering;
+  return jbuf->buffering && !jbuf->buffering_disabled;
 }
 
 /**
@@ -881,6 +899,9 @@ rtp_jitter_buffer_get_percent (RTPJitterBuffer * jbuf)
   guint64 level;
 
   if (G_UNLIKELY (jbuf->high_level == 0))
+    return 100;
+
+  if (G_UNLIKELY (jbuf->buffering_disabled))
     return 100;
 
   level = get_buffer_level (jbuf);

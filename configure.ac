@@ -499,53 +499,17 @@ AG_GST_CHECK_FEATURE(OSX_VIDEO, [OSX video], osxvideosink, [
 ])
 
 dnl *** Video 4 Linux 2 ***
-dnl for information about the header/define, see sys/v4l2/gstv4l2element.h
 dnl renamed to GST_V4L2 because of some conflict with kernel headers
 translit(dnm, m, l) AM_CONDITIONAL(USE_GST_V4L2, true)
-AG_GST_CHECK_FEATURE(GST_V4L2, [Video 4 Linux 2], v4l2src, [
-  AC_MSG_CHECKING([Checking for up to date v4l2 installation])
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
-#include <sys/types.h>
-#ifdef __sun /* Solaris */
-#include <sys/types.h>
-#include <sys/videodev2.h>
-#elif __FreeBSD__
-#include <linux/videodev2.h>
-#else /* Linux */
-#include <linux/types.h>
-#define _LINUX_TIME_H
-#define __user
-#include <linux/videodev2.h>
-#endif
-#if defined(V4L2_MAJOR_VERSION) || defined(V4L2_MINOR_VERSION)
-#error too early v4l2 version or no v4l2 at all
-#endif
-    ]], [[
-return 0;
-    ]])],[
-      HAVE_GST_V4L2="yes"
-      AC_MSG_RESULT(yes)
-    ],[
-      HAVE_GST_V4L2="no"
-      AC_MSG_RESULT(no)
-
-      HAVE_VIDEODEV=no
-      AC_CHECK_HEADER(linux/videodev2.h, [ HAVE_VIDEODEV=yes ],
-      [
-        AC_CHECK_HEADER(sys/videodev2.h, [ HAVE_VIDEODEV=yes ])
-      ])
-
-      if test "x$HAVE_VIDEODEV" = "xyes"; then
-        AC_MSG_WARN([video4linux2 headers were found, but they're old.])
-        AC_MSG_WARN([Please update v4l2 to compile the v4l2 plugins])
-      else
-        AC_MSG_WARN([video4linux2 was not found])
-      fi
-    ])
-
-  if [ test x$HAVE_GST_V4L2 = xyes ]; then
-    dnl check for XOverlay libraries
-    AG_GST_CHECK_XV
+HAVE_GST_V4L2=no
+AG_GST_CHECK_FEATURE(GST_V4L2, [Video 4 Linux 2], video4linux2, [
+  AC_MSG_CHECKING([Checking for video4linux2 header ...])
+  AC_CHECK_HEADER(linux/videodev2.h, [ HAVE_GST_V4L2=yes ],
+  [
+    AC_CHECK_HEADER(sys/videodev2.h, [ HAVE_GST_V4L2=yes ])
+  ])
+  if test "x$HAVE_VIDEODEV" = "xno"; then
+     AC_MSG_WARN([video4linux2 was not found])
   fi
 ])
 
@@ -556,18 +520,14 @@ AC_ARG_WITH([gudev],
   [with_gudev=check])
 if test x$HAVE_GST_V4L2 = xyes; then
   if test x$with_gudev != xno; then
-      PKG_CHECK_MODULES(GUDEV, [ gudev-1.0 >= 143 ],
-          [ have_gudev=yes
-            AC_DEFINE(HAVE_GUDEV, 1,
-               [Whether gudev is available for device detection])
-            AC_DEFINE([G_UDEV_API_IS_SUBJECT_TO_CHANGE], 1, [I know the API is subject to change.])
-          ], [
-          have_gudev=no
-          ])
-  else
-    have_gudev=no
+    PKG_CHECK_MODULES(GUDEV, [ gudev-1.0 >= 147 ],
+      [ AC_DEFINE(HAVE_GUDEV, 1,
+          [Whether gudev is available for device detection])
+      ],
+      [true])
   fi
 fi
+
 AC_SUBST(GUDEV_CFLAGS)
 AC_SUBST(GUDEV_LIBS)
 
@@ -588,24 +548,6 @@ if test x$HAVE_GST_V4L2 = xyes; then
   else
     have_libv4l2=no
   fi
-fi
-
-# Check if v4l2 support dmabuf
-if test x$HAVE_GST_V4L2 = xyes; then
-	AC_CHECK_DECLS(V4L2_MEMORY_DMABUF,,,[
-					#include <sys/types.h>
-					#ifdef __sun /* Solaris */
-					#include <sys/types.h>
-					#include <sys/videodev2.h>
-					#elif __FreeBSD__
-					#include <linux/videodev2.h>
-					#else /* Linux */
-					#include <linux/types.h>
-					#define _LINUX_TIME_H
-					#define __user
-					#include <linux/videodev2.h>
-					#endif
-					])
 fi
 
 dnl Check for X11
@@ -681,13 +623,6 @@ AG_GST_CHECK_FEATURE(XSHM, [X Shared Memory extension], , [
 ], ,[
   AC_SUBST(HAVE_XSHM)
   AC_SUBST(XSHM_LIBS)
-])
-
-dnl for V4L2, we also need to know if we have XVIDEO
-translit(dnm, m, l) AM_CONDITIONAL(USE_XVIDEO, true)
-AG_GST_CHECK_FEATURE(XVIDEO, [X11 XVideo extensions],
-                  [], [
-  AG_GST_CHECK_XV
 ])
 
 dnl *** ext plug-ins ***
@@ -849,7 +784,7 @@ AG_GST_CHECK_FEATURE(SHOUT2, [Shoutcast/Icecast client library], shout2, [
 dnl *** soup ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_SOUP, true)
 AG_GST_CHECK_FEATURE(SOUP, [soup http client plugin (2.4)], souphttpsrc, [
-  PKG_CHECK_MODULES(SOUP, libsoup-2.4 >= 2.38, [HAVE_SOUP="yes"], [HAVE_SOUP="no"])
+  PKG_CHECK_MODULES(SOUP, libsoup-2.4 >= 2.40, [HAVE_SOUP="yes"], [HAVE_SOUP="no"])
   AC_SUBST(SOUP_CFLAGS)
   AC_SUBST(SOUP_LIBS)
 ])
@@ -1005,7 +940,6 @@ AM_CONDITIONAL(USE_DIRECTSOUND, false)
 AM_CONDITIONAL(USE_DV1394, false)
 AM_CONDITIONAL(USE_FLAC, false)
 AM_CONDITIONAL(USE_GDK_PIXBUF, false)
-AM_CONDITIONAL(USE_GST_V4L2, false)
 AM_CONDITIONAL(USE_JACK, false)
 AM_CONDITIONAL(USE_JPEG, false)
 AM_CONDITIONAL(USE_LIBCACA, false)
@@ -1027,7 +961,6 @@ AM_CONDITIONAL(USE_WAVEFORM, false)
 AM_CONDITIONAL(USE_WAVPACK, false)
 AM_CONDITIONAL(USE_X, false)
 AM_CONDITIONAL(USE_XSHM, false)
-AM_CONDITIONAL(USE_XVIDEO, false)
 AM_CONDITIONAL(USE_ZLIB, false)
 
 fi dnl of EXT plugins

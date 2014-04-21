@@ -296,6 +296,8 @@ gst_jpeg_dec_parse (GstVideoDecoder * bdec, GstVideoCodecFrame * frame,
   gint offset = 0, noffset;
   GstJpegDec *dec = (GstJpegDec *) bdec;
 
+  GST_VIDEO_CODEC_FRAME_SET_SYNC_POINT (frame);
+
   /* FIXME : The overhead of using scan_uint32 is massive */
 
   size = gst_adapter_available (adapter);
@@ -456,6 +458,7 @@ need_more_data:
 have_full_frame:
   if (toadd)
     gst_video_decoder_add_to_frame (bdec, toadd);
+  GST_VIDEO_CODEC_FRAME_SET_SYNC_POINT (frame);
   return gst_video_decoder_have_frame (bdec);
 
 drop_frame:
